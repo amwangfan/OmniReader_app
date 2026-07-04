@@ -11,6 +11,7 @@ import org.xml.sax.InputSource
 
 data class EpubDocument(
     val title: String,
+    val author: String,
     val chapters: List<EpubChapter>,
 )
 
@@ -35,6 +36,11 @@ class EpubParser {
                 ?.trim()
                 ?.takeIf { it.isNotBlank() }
                 ?: file.nameWithoutExtension
+            val author = opf.elementsByLocalName("creator")
+                .firstOrNull()
+                ?.textContent
+                ?.trim()
+                .orEmpty()
 
             val manifest = opf.elementsByLocalName("item").associate { item ->
                 item.getAttribute("id") to ManifestItem(
@@ -54,6 +60,7 @@ class EpubParser {
 
             return EpubDocument(
                 title = title,
+                author = author,
                 chapters = chapters.ifEmpty {
                     listOf(EpubChapter(title = title, text = "This EPUB has no readable XHTML spine yet."))
                 },
