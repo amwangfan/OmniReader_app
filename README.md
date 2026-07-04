@@ -16,14 +16,14 @@ Rooted and non-rooted devices use the same code path for this MVP. BOOX-specific
 ## Build
 
 ```powershell
-cd E:\Codex\Projects\OmniReader\android
+cd E:\Codex\Projects\OmniReader_app
 .\gradlew.bat testDebugUnitTest assembleDebug
 ```
 
 The debug APK is written to:
 
 ```text
-android\app\build\outputs\apk\debug\app-debug.apk
+app\build\outputs\apk\debug\app-debug.apk
 ```
 
 The app enables cleartext HTTP traffic so it can connect to the current Tailscale demo server:
