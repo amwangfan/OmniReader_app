@@ -1,4 +1,5 @@
 .gradle/
 .superpowers/
+.worktrees/
 local.properties
 **/build/
