@@ -35,6 +35,25 @@ data class BooksResponse(
 )
 
 @Serializable
+enum class StorageKind {
+    INTERNAL,
+    DOCUMENT_URI,
+}
+
+@Serializable
+enum class BookSource {
+    SERVER_DOWNLOAD,
+    LOCAL_IMPORT,
+}
+
+@Serializable
+enum class BookSyncState {
+    SYNCED,
+    PENDING_UPLOAD,
+    LOCAL_ONLY,
+}
+
+@Serializable
 data class LocalBook(
     val id: String,
     val title: String,
@@ -43,7 +62,19 @@ data class LocalBook(
     val fileSize: Long,
     val checksum: String,
     val downloadedAtEpochMillis: Long,
-)
+    val remoteBookId: String? = null,
+    val storageKind: StorageKind = StorageKind.INTERNAL,
+    val documentUri: String? = null,
+    val source: BookSource = BookSource.SERVER_DOWNLOAD,
+    val syncState: BookSyncState = BookSyncState.SYNCED,
+) {
+    fun normalized(): LocalBook =
+        if (source == BookSource.SERVER_DOWNLOAD && remoteBookId == null) {
+            copy(remoteBookId = id, syncState = BookSyncState.SYNCED)
+        } else {
+            this
+        }
+}
 
 @Serializable
 data class LocalBookIndex(
@@ -53,4 +84,10 @@ data class LocalBookIndex(
         val next = books.filterNot { it.id == book.id } + book
         return copy(books = next.sortedBy { it.title.lowercase() })
     }
+
+    fun normalized(): LocalBookIndex = copy(books = books.map(LocalBook::normalized))
+
+    fun remove(localId: String): LocalBookIndex = copy(books = books.filterNot { it.id == localId })
+
+    fun pendingUploads(): List<LocalBook> = books.filter { it.syncState == BookSyncState.PENDING_UPLOAD }
 }
