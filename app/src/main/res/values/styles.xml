@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.OmniReader" parent="android:style/Theme.Material.Light.NoActionBar" />
+</resources>
