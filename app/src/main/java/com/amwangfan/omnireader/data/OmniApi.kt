@@ -1,13 +1,16 @@
 package com.amwangfan.omnireader.data
 
 import java.io.File
+import java.io.OutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 
 class OmniApi(
@@ -55,6 +58,17 @@ class OmniApi(
         targetFile: File,
     ): Long = withContext(Dispatchers.IO) {
         targetFile.parentFile?.mkdirs()
+        targetFile.outputStream().use { output ->
+            downloadBook(baseUrl, accessToken, bookId, output)
+        }
+    }
+
+    suspend fun downloadBook(
+        baseUrl: String,
+        accessToken: String,
+        bookId: String,
+        output: OutputStream,
+    ): Long = withContext(Dispatchers.IO) {
         val request = authorizedBuilder(baseUrl, accessToken, "/api/v1/books/$bookId/download")
             .get()
             .build()
@@ -64,11 +78,35 @@ class OmniApi(
                 throw ApiException(response.code, body.ifBlank { "Download failed" })
             }
             val responseBody = response.body ?: throw ApiException(response.code, "Empty download body")
-            targetFile.outputStream().use { output ->
-                responseBody.byteStream().use { input -> input.copyTo(output) }
-            }
+            responseBody.byteStream().use { input -> input.copyTo(output) }
         }
-        targetFile.length()
+    }
+
+    suspend fun uploadBook(
+        baseUrl: String,
+        accessToken: String,
+        title: String,
+        file: File,
+    ): BookDto = withContext(Dispatchers.IO) {
+        val multipart = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("title", title)
+            .addFormDataPart(
+                "file",
+                file.name,
+                file.asRequestBody("application/epub+zip".toMediaType()),
+            )
+            .build()
+        val request = authorizedBuilder(baseUrl, accessToken, "/api/v1/books")
+            .post(multipart)
+            .build()
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw ApiException(response.code, body.ifBlank { "Upload failed" })
+            }
+            json.decodeFromString<BookResponse>(body).book
+        }
     }
 
     private fun authorizedBuilder(baseUrl: String, token: String, path: String): Request.Builder =

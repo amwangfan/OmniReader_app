@@ -35,6 +35,11 @@ data class BooksResponse(
 )
 
 @Serializable
+data class BookResponse(
+    val book: BookDto,
+)
+
+@Serializable
 enum class StorageKind {
     INTERNAL,
     DOCUMENT_URI,
