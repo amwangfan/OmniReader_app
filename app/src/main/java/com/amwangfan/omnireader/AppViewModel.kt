@@ -354,6 +354,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         checkpointReading(0, 0)
     }
 
+    fun updateBook(book: BookDto) {
+        viewModelScope.launch {
+            val state = _uiState.value
+            if (!hasServerSession(state)) {
+                _uiState.update { it.copy(errorMessage = "Configure the server and sign in first") }
+                return@launch
+            }
+            setBusy(true)
+            runCatching {
+                localBookStore.update(book, epubParser) { output ->
+                    api.downloadBook(state.serverUrl, state.accessToken, book.id, output)
+                }
+            }.onSuccess {
+                refreshLocalBooks()
+                _uiState.update {
+                    it.copy(lastSyncMessage = "Updated " + book.title, errorMessage = null)
+                }
+            }.onFailure { error ->
+                _uiState.update { it.copy(errorMessage = error.message ?: "Update failed") }
+            }
+            setBusy(false)
+        }
+    }
+
     fun checkpointReading(blockIndex: Int, charOffset: Int) {
         val reader = _uiState.value.reader ?: return
         val locator = LocatorResolver.locatorFor(

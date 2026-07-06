@@ -34,6 +34,29 @@ class BookDisplayTest {
         assertEquals(local, localBookForRemote(remote, listOf(local)))
     }
 
+    @Test
+    fun remoteRevisionChange_isShownAsUpdateAvailable() {
+        val local = localBook(BookSyncState.SYNCED).copy(
+            remoteBookId = "remote-1",
+            contentRevision = "revision-1",
+        )
+        val remote = BookDto(
+            id = "remote-1",
+            title = "Remote",
+            format = "epub",
+            fileSize = 1,
+            checksum = "new-sum",
+            createdAt = "now",
+            updatedAt = "now",
+            contentRevision = "revision-2",
+        )
+
+        assertEquals(true, isUpdateAvailable(remote, local))
+        assertEquals(true, isUpdateAvailable(remote, local.copy(contentRevision = "")))
+        assertEquals(false, isUpdateAvailable(remote.copy(contentRevision = "revision-1"), local))
+        assertEquals(false, isUpdateAvailable(remote.copy(contentRevision = ""), local))
+    }
+
     private fun localBook(state: BookSyncState) = LocalBook(
         id = "local-sum",
         title = "Imported",

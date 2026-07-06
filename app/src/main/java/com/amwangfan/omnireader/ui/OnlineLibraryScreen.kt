@@ -38,6 +38,7 @@ fun OnlineLibraryScreen(
     onSettings: () -> Unit,
     onSync: () -> Unit,
     onRead: (LocalBook) -> Unit,
+    onUpdate: (BookDto) -> Unit,
     onDownloadDefault: (BookDto) -> Unit,
     onChooseFolder: (BookDto) -> Unit,
 ) {
@@ -83,12 +84,22 @@ fun OnlineLibraryScreen(
                     title = remote.title,
                     author = remote.author,
                     fileSize = remote.fileSize,
-                    status = if (local != null) "On device" else null,
+                    status = when {
+                        local == null -> null
+                        isUpdateAvailable(remote, local) -> "Update available"
+                        else -> "On device"
+                    },
                     actions = {
                         if (local != null) {
                             Button(onClick = { onRead(local) }, enabled = !state.isBusy) {
                                 Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = null)
                                 Text("Read", modifier = Modifier.padding(start = 6.dp))
+                            }
+                            if (isUpdateAvailable(remote, local)) {
+                                Button(onClick = { onUpdate(remote) }, enabled = !state.isBusy) {
+                                    Icon(Icons.Outlined.Download, contentDescription = null)
+                                    Text("Update", modifier = Modifier.padding(start = 6.dp))
+                                }
                             }
                         } else {
                             DownloadMenu(

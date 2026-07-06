@@ -182,6 +182,7 @@ fun OmniReaderApp(viewModel: AppViewModel = viewModel()) {
                     onSettings = viewModel::showSettings,
                     onSync = viewModel::sync,
                     onRead = viewModel::openBook,
+                    onUpdate = viewModel::updateBook,
                     onDownloadDefault = viewModel::download,
                     onChooseFolder = { book ->
                         pendingDownload = book
