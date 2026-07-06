@@ -50,7 +50,11 @@ class ReadingSyncCoordinator(
 
     suspend fun syncAllDirty() {
         gateway.register(identity)
-        store.dirtyRecords().filter { it.second == identity.id }.forEach { (bookId, _, _) -> syncBook(bookId) }
+        var firstFailure: Throwable? = null
+        store.dirtyRecords().filter { it.second == identity.id }.forEach { (bookId, _, _) ->
+            runCatching { syncBook(bookId) }.onFailure { if (firstFailure == null) firstFailure = it }
+        }
+        firstFailure?.let { throw it }
     }
 
     suspend fun resumeFor(bookId: String): ResumeProgress? {

@@ -46,9 +46,10 @@ class ReadingStateStoreTest {
     @Test fun migrateBookId_movesPendingLocalStateToRemoteIdentity() {
         val store = ReadingStateStore(tempDir())
         store.put("local", "d", ReadingStateRecord(locator(), mapOf("2026-07-06" to 4), true, generation=3))
-        store.migrateBookId("local", "remote", "d")
+        store.migrateBookId("local", "remote", "d", "2026-07-06T01:02:03.000000000Z")
         assertEquals(null, store.get("local", "d"))
         assertEquals(4L, store.get("remote", "d")!!.dailyReadSeconds["2026-07-06"])
+        assertEquals("2026-07-06T01:02:03.000000000Z", store.get("remote", "d")!!.locator.contentRevision)
     }
 
     private fun locator() = ReadingLocator(contentRevision="r", chapterHref="c", chapterIndex=0, blockIndex=0)

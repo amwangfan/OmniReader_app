@@ -63,13 +63,19 @@ class ReadingStateStore(
         put(bookId, deviceId, ReadingStateRecord(locator, totals, dirty = true, lastServerUpdatedAt = old?.lastServerUpdatedAt, generation = (old?.generation ?: 0) + 1))
     }
 
-    @Synchronized fun migrateBookId(localBookId: String, remoteBookId: String, deviceId: String) {
+    @Synchronized fun migrateBookId(
+        localBookId: String,
+        remoteBookId: String,
+        deviceId: String,
+        contentRevision: String,
+    ) {
         if (localBookId == remoteBookId) return
         val source = get(localBookId, deviceId) ?: return
         val target = get(remoteBookId, deviceId)
         val totals = target?.dailyReadSeconds.orEmpty().toMutableMap()
         source.dailyReadSeconds.forEach { (date, seconds) -> totals[date] = maxOf(totals.getOrDefault(date, 0), seconds) }
         val migrated = source.copy(
+            locator = source.locator.copy(contentRevision = contentRevision),
             dailyReadSeconds = totals,
             dirty = source.dirty || target?.dirty == true,
             generation = maxOf(source.generation, target?.generation ?: 0) + 1,

@@ -60,15 +60,32 @@ class ReadingSyncCoordinatorTest {
         assertEquals(null, result.sourceDeviceName)
     }
 
+    @Test fun syncAllDirty_attemptsRemainingBooksAfterOneFailure() = runTest {
+        val store = ReadingStateStore(tempDir())
+        store.put("missing", "d", ReadingStateRecord(locator(), dirty = true))
+        store.put("remote", "d", ReadingStateRecord(locator(), dirty = true))
+        val events = mutableListOf<String>()
+        val gateway = FakeGateway(events).apply { failBookId = "missing" }
+
+        runCatching { ReadingSyncCoordinator(gateway, store, identity()).syncAllDirty() }
+
+        assertTrue(store.get("missing", "d")!!.dirty)
+        assertFalse(store.get("remote", "d")!!.dirty)
+        assertTrue(events.contains("put:remote"))
+    }
+
     private class FakeGateway(private val events: MutableList<String>) : ReadingSyncGateway {
         var failPut=false
+        var failBookId: String? = null
         var onPut: (() -> Unit)? = null
         var onGet: (() -> Unit)? = null
         var response=ProgressResponse(null, null, "r")
         override suspend fun register(identity: DeviceRegistrationRequest) { events += "register" }
         override suspend fun get(bookId: String, deviceId: String): ProgressResponse { events += "get"; onGet?.invoke(); return response }
         override suspend fun put(bookId: String, request: ProgressPutRequest): ProgressResponse {
-            events += "put"; if (failPut) error("offline"); onPut?.invoke()
+            events += if (failBookId == null) "put" else "put:$bookId"
+            if (failPut || failBookId == bookId) error("offline")
+            onPut?.invoke()
             return ProgressResponse(ProgressDto(bookId, request.deviceId, "This", request.locator, request.percentage, request.clientUpdatedAt, "server", false), null, "r")
         }
     }

@@ -402,13 +402,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun performSync() {
         val state = _uiState.value
         if (!hasServerSession(state)) return
-        runCatching { withContext(readingIo) { coordinator(state)?.syncAllDirty() } }
         val uploadFailures = processPendingUploads(localBookStore.pendingUploads()) { book ->
             val file = localBookStore.materialize(book)
             val remote = api.uploadBook(state.serverUrl, state.accessToken, book.title, file)
             localBookStore.markUploaded(book.id, remote)
-            withContext(readingIo) { readingStateStore.migrateBookId(book.id, remote.id, identity.id) }
+            withContext(readingIo) {
+                readingStateStore.migrateBookId(book.id, remote.id, identity.id, remote.contentRevision)
+            }
         }
+        runCatching { withContext(readingIo) { coordinator(state)?.syncAllDirty() } }
         runCatching {
             api.listBooks(state.serverUrl, state.accessToken)
         }.onSuccess { books ->
@@ -436,7 +438,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val file = localBookStore.materialize(book)
             val remote = api.uploadBook(state.serverUrl, state.accessToken, book.title, file)
             localBookStore.markUploaded(book.id, remote)
-            withContext(readingIo) { readingStateStore.migrateBookId(book.id, remote.id, identity.id) }
+            withContext(readingIo) {
+                readingStateStore.migrateBookId(book.id, remote.id, identity.id, remote.contentRevision)
+                runCatching { coordinator(state)?.syncBook(remote.id) }
+            }
         }.isSuccess
     }
 
