@@ -16,6 +16,7 @@ Native Kotlin + Jetpack Compose Android client for OmniReader.
 - Persist block-level EPUB progress and local-date reading totals in an atomic local state file.
 - Resume from the latest server position across devices while retaining independent per-device rows.
 - Render stable hashed reading blocks and restore changed EPUBs with ordered locator fallbacks.
+- Detect server EPUB revisions and replace downloaded copies only after the new file parses successfully.
 
 Rooted and non-rooted devices use the same code path for this MVP. BOOX-specific root/no-root optimizations can be added after the basic reader flow is stable.
 
