@@ -102,6 +102,7 @@ class LocalBookStore internal constructor(
     suspend fun update(
         remote: BookDto,
         parser: EpubParser,
+        fallbackTreeUri: String? = null,
         writer: suspend (OutputStream) -> Long,
     ): LocalBook = withContext(Dispatchers.IO) {
         val current = loadBooks().firstOrNull { it.remoteBookId == remote.id }
@@ -110,6 +111,8 @@ class LocalBookStore internal constructor(
             StorageKind.INTERNAL -> StorageDestination.Internal
             StorageKind.DOCUMENT_URI -> StorageDestination.Tree(
                 current.storageTreeUri?.takeIf(String::isNotBlank)
+                    ?: current.documentUri?.let(::treeUriFromDocumentUri)
+                    ?: fallbackTreeUri?.takeIf(String::isNotBlank)
                     ?: error("The original download folder must be selected again before updating this book"),
             )
         }
@@ -138,7 +141,10 @@ class LocalBookStore internal constructor(
             runCatching(output.discard)
             throw error
         }
-        runCatching { managedFiles.delete(current) }
+        val deleteResult = runCatching { managedFiles.delete(current) }.getOrNull()
+        if (deleteResult == null || deleteResult == ManagedDeleteResult.FAILED) {
+            System.err.println("OmniReader: old EPUB cleanup remains pending for ${current.fileName}")
+        }
         replacement
     }
 
@@ -286,4 +292,18 @@ class LocalBookStore internal constructor(
             Files.move(tempFile.toPath(), indexFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
     }
+}
+
+internal fun treeUriFromDocumentUri(documentUri: String): String? {
+    if (!documentUri.startsWith("content://")) return null
+    val treeMarker = "/tree/"
+    val documentMarker = "/document/"
+    val treeStart = documentUri.indexOf(treeMarker)
+    if (treeStart < 0) return null
+    val treeIdStart = treeStart + treeMarker.length
+    val documentStart = documentUri.indexOf(documentMarker, treeIdStart)
+    if (documentStart <= treeIdStart) return null
+    val encodedTreeId = documentUri.substring(treeIdStart, documentStart)
+    if (encodedTreeId.isBlank() || '/' in encodedTreeId) return null
+    return documentUri.substring(0, documentStart)
 }

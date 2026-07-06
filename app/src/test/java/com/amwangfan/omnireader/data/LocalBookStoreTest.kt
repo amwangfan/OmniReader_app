@@ -160,6 +160,18 @@ class LocalBookStoreTest {
     }
 
     @Test
+    fun treeUriFromDocumentUri_derivesTypicalSafTreeWithoutDocumentPath() {
+        assertEquals(
+            "content://com.android.externalstorage.documents/tree/primary%3ABooks",
+            treeUriFromDocumentUri(
+                "content://com.android.externalstorage.documents/tree/primary%3ABooks/document/primary%3ABooks%2Fbook.epub",
+            ),
+        )
+        assertEquals(null, treeUriFromDocumentUri("content://provider/document/book"))
+        assertEquals(null, treeUriFromDocumentUri("https://provider/tree/root/document/book"))
+    }
+
+    @Test
     fun markUploaded_recordsRemoteIdentityAndSyncedState() = runTest {
         val local = store.importBook(
             source = ByteArrayInputStream(fixtureEpubBytes()),
