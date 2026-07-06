@@ -88,6 +88,12 @@ fun OmniReaderApp(viewModel: AppViewModel = viewModel()) {
     LaunchedEffect(state.lastSyncMessage) {
         state.lastSyncMessage?.let { snackbarHostState.showSnackbar(it) }
     }
+    LaunchedEffect(state.readerNotice) {
+        state.readerNotice?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.consumeReaderNotice()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -200,6 +206,8 @@ fun OmniReaderApp(viewModel: AppViewModel = viewModel()) {
                     padding = screenPadding,
                     onPrevious = viewModel::previousChapter,
                     onNext = viewModel::nextChapter,
+                    onCheckpoint = viewModel::checkpointReading,
+                    onActiveChanged = viewModel::readerActive,
                 )
             }
         }

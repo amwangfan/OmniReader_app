@@ -58,6 +58,7 @@ class LocalBookStore internal constructor(
             remoteBookId = remote.id,
             source = BookSource.SERVER_DOWNLOAD,
             syncState = BookSyncState.SYNCED,
+            contentRevision = remote.contentRevision,
         )
         updateIndex { it.upsert(local) }
         local
@@ -84,6 +85,7 @@ class LocalBookStore internal constructor(
                 documentUri = output.documentUri,
                 source = BookSource.SERVER_DOWNLOAD,
                 syncState = BookSyncState.SYNCED,
+                contentRevision = remote.contentRevision,
             )
             updateIndex { it.upsert(local) }
             local
@@ -168,6 +170,7 @@ class LocalBookStore internal constructor(
                 author = remote.author.ifBlank { current.author },
                 remoteBookId = remote.id,
                 syncState = BookSyncState.SYNCED,
+                contentRevision = remote.contentRevision,
             )
             updated = next
             index.upsert(next)
