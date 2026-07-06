@@ -12,15 +12,25 @@ Native Kotlin + Jetpack Compose Android client for OmniReader.
 - Upload imported books by default and retry pending uploads on the next app-driven sync.
 - Delete managed local copies without deleting the source file or server copy.
 - Open an EPUB with a minimal spine/XHTML text reader and previous/next chapter controls.
+- Keep a random, preference-backed Android device identity without hardware identifiers.
+- Persist block-level EPUB progress and local-date reading totals in an atomic local state file.
+- Resume from the latest server position across devices while retaining independent per-device rows.
+- Render stable hashed reading blocks and restore changed EPUBs with ordered locator fallbacks.
 
 Rooted and non-rooted devices use the same code path for this MVP. BOOX-specific root/no-root optimizations can be added after the basic reader flow is stable.
 
 ## Build
 
-```powershell
-cd E:\Codex\Projects\OmniReader_app
-.\gradlew.bat testDebugUnitTest assembleDebug
+Android release/debug validation is performed on the N100 builder as user `n100`. Source, Android SDK,
+and Gradle caches are placed in a temporary build directory, downloads use the builder-local
+`127.0.0.1:5081` proxy, and `/home/n100/.android/debug.keystore` is preserved for stable debug signing.
+The final builder command is:
+
+```sh
+./gradlew clean testDebugUnitTest assembleDebug
 ```
+
+After the APK is copied back to Windows, remove the temporary N100 source, SDK, and Gradle directories.
 
 The debug APK is written to:
 
