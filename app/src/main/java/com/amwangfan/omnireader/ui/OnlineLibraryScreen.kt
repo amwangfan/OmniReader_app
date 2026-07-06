@@ -39,6 +39,7 @@ fun OnlineLibraryScreen(
     onSync: () -> Unit,
     onRead: (LocalBook) -> Unit,
     onUpdate: (BookDto) -> Unit,
+    onChooseUpdateFolder: (BookDto) -> Unit,
     onDownloadDefault: (BookDto) -> Unit,
     onChooseFolder: (BookDto) -> Unit,
 ) {
@@ -96,10 +97,11 @@ fun OnlineLibraryScreen(
                                 Text("Read", modifier = Modifier.padding(start = 6.dp))
                             }
                             if (isUpdateAvailable(remote, local)) {
-                                Button(onClick = { onUpdate(remote) }, enabled = !state.isBusy) {
-                                    Icon(Icons.Outlined.Download, contentDescription = null)
-                                    Text("Update", modifier = Modifier.padding(start = 6.dp))
-                                }
+                                UpdateMenu(
+                                    enabled = !state.isBusy,
+                                    onUpdate = { onUpdate(remote) },
+                                    onChooseFolder = { onChooseUpdateFolder(remote) },
+                                )
                             }
                         } else {
                             DownloadMenu(
@@ -111,6 +113,28 @@ fun OnlineLibraryScreen(
                     },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun UpdateMenu(enabled: Boolean, onUpdate: () -> Unit, onChooseFolder: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Button(onClick = { expanded = true }, enabled = enabled) {
+            Icon(Icons.Outlined.Download, contentDescription = null)
+            Text("Update", modifier = Modifier.padding(start = 6.dp))
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Current location") },
+                onClick = { expanded = false; onUpdate() },
+            )
+            DropdownMenuItem(
+                text = { Text("Choose folder") },
+                leadingIcon = { Icon(Icons.Outlined.FolderOpen, contentDescription = null) },
+                onClick = { expanded = false; onChooseFolder() },
+            )
         }
     }
 }

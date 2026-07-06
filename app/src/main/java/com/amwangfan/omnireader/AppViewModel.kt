@@ -354,7 +354,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         checkpointReading(0, 0)
     }
 
-    fun updateBook(book: BookDto) {
+    fun updateBook(book: BookDto, fallbackTreeUri: String? = null) {
         viewModelScope.launch {
             val state = _uiState.value
             if (!hasServerSession(state)) {
@@ -362,19 +362,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             setBusy(true)
-            runCatching {
-                localBookStore.update(book, epubParser) { output ->
+            try {
+                localBookStore.update(book, epubParser, fallbackTreeUri) { output ->
                     api.downloadBook(state.serverUrl, state.accessToken, book.id, output)
                 }
-            }.onSuccess {
                 refreshLocalBooks()
                 _uiState.update {
                     it.copy(lastSyncMessage = "Updated " + book.title, errorMessage = null)
                 }
-            }.onFailure { error ->
+            } catch (error: Throwable) {
                 _uiState.update { it.copy(errorMessage = error.message ?: "Update failed") }
+            } finally {
+                setBusy(false)
             }
-            setBusy(false)
         }
     }
 
