@@ -43,6 +43,6 @@ class OmniApiProgressTest {
     }
 
     private fun locator() = ReadingLocator(contentRevision="r", chapterHref="c", chapterIndex=0, blockIndex=0)
-    private fun deviceJson() = """{"id":"d","displayName":"Display","systemName":"System","platform":"android","manufacturer":"Onyx","model":"Leaf","appVersion":"0.3","disabled":false}"""
+    private fun deviceJson() = """{"id":"d","displayName":"Display","systemName":"System","platform":"android","manufacturer":"Onyx","model":"Leaf","appVersion":"0.3","lastSeenAt":"now","disabledAt":null}"""
     private fun progressJson() = """{"deviceProgress":null,"globalProgress":null,"contentRevision":"r"}"""
 }

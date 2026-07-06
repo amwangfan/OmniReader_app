@@ -32,6 +32,14 @@ class ProgressModelsTest {
         assertEquals(34L, request.dailyReadSeconds["2026-07-06"])
     }
 
+    @Test fun deviceResponse_matchesServerFieldsIncludingNullableDisabledAt() {
+        val device = DeviceDto("d", "Display", "System", "android", "Onyx", "Leaf", "0.3.0", "seen", null)
+        assertEquals(
+            """{"id":"d","displayName":"Display","systemName":"System","platform":"android","manufacturer":"Onyx","model":"Leaf","appVersion":"0.3.0","lastSeenAt":"seen","disabledAt":null}""",
+            json.encodeToString(device),
+        )
+    }
+
     @Test fun legacyBookJson_defaultsContentRevision() {
         val book = Json.decodeFromString<BookDto>("""{"id":"b","title":"T","format":"epub","fileSize":1,"checksum":"x","createdAt":"c","updatedAt":"u"}""")
         assertEquals("", book.contentRevision)

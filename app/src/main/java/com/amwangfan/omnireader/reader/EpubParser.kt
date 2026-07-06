@@ -45,7 +45,9 @@ class EpubParser {
             doc.elements(name).firstOrNull()?.textContent?.normalized()?.takeIf(String::isNotBlank)
         } ?: "Chapter"
         val body = doc.elements("body").firstOrNull() ?: doc.documentElement
-        val blocks = body.walkElements().filter { it.elementName() in readableElements }.mapNotNull { element ->
+        val blocks = body.walkElements().filter {
+            it.elementName() in readableElements && !it.hasReadableAncestor(body)
+        }.mapNotNull { element ->
             val text = element.textContent.normalized().takeIf(String::isNotBlank) ?: return@mapNotNull null
             element.elementName() to text
         }.mapIndexed { index, (kind, text) -> EpubBlock(index, kind, text, normalizedTextHash(text)) }
@@ -76,6 +78,14 @@ class EpubParser {
         visit(this@walkElements)
     }
     private fun Element.elementName() = (localName ?: tagName.substringAfter(':')).lowercase()
+    private fun Element.hasReadableAncestor(root: Element): Boolean {
+        var parent = parentNode
+        while (parent is Element && parent !== root) {
+            if (parent.elementName() in readableElements) return true
+            parent = parent.parentNode
+        }
+        return false
+    }
     private fun String.normalized() = replace('\u00a0', ' ').replace(Regex("\\s+"), " ").trim()
     private fun stripTags(html: String) = html.replace(Regex("<[^>]+>"), " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").normalized()
     private fun resolveZipPath(opfPath: String, href: String): String {

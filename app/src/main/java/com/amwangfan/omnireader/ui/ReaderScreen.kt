@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -41,7 +42,9 @@ fun ReaderScreen(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onCheckpoint: (Int, Int) -> Unit,
+    onVisiblePosition: (Int, Int) -> Unit,
     onActiveChanged: (Boolean) -> Unit,
+    onDisposed: () -> Unit,
 ) {
     val reader = state.reader
     if (reader == null) {
@@ -51,7 +54,18 @@ fun ReaderScreen(
     val listState = rememberLazyListState(reader.initialBlockIndex, reader.initialScrollOffset)
     LifecycleResumeEffect(reader.localBookId) {
         onActiveChanged(true)
-        onPauseOrDispose { onActiveChanged(false) }
+        onPauseOrDispose {
+            onVisiblePosition(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+            onCheckpoint(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+            onActiveChanged(false)
+        }
+    }
+    DisposableEffect(reader.localBookId, listState) {
+        onDispose {
+            onVisiblePosition(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+            onCheckpoint(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+            onDisposed()
+        }
     }
     LaunchedEffect(reader.positionVersion, reader.currentChapterIndex, listState) {
         listState.scrollToItem(reader.initialBlockIndex, reader.initialScrollOffset)
@@ -62,6 +76,12 @@ fun ReaderScreen(
             .distinctUntilChanged()
             .debounce(650)
             .collect { (block, offset) -> onCheckpoint(block, offset) }
+    }
+    LaunchedEffect(reader.positionVersion, reader.currentChapterIndex, listState) {
+        snapshotFlow {
+            Triple(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, listState.isScrollInProgress)
+        }.filter { it.third }
+            .collect { (block, offset, _) -> onVisiblePosition(block, offset) }
     }
 
     Column(Modifier.padding(padding).fillMaxSize().padding(horizontal = 18.dp, vertical = 12.dp)) {

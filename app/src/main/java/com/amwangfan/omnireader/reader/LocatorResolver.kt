@@ -2,7 +2,7 @@ package com.amwangfan.omnireader.reader
 
 import com.amwangfan.omnireader.data.ReadingLocator
 
-enum class LocatorResolutionReason { EXACT, HASH_IN_CHAPTER, HREF_INDEX, CHAPTER_PROGRESS, BOOK_PROGRESS, CHAPTER_START }
+enum class LocatorResolutionReason { EXACT, HASH_IN_CHAPTER, HREF_INDEX, CHAPTER_PROGRESS, BOOK_PROGRESS, TEXT_QUOTE, CHAPTER_START }
 
 data class LocatorResolution(
     val chapterIndex: Int,
@@ -30,7 +30,7 @@ object LocatorResolver {
             textQuote = block?.text.orEmpty().take(160),
             textHash = block?.textHash.orEmpty(),
             chapterProgress = if (chapter.blocks.size <= 1) 0.0 else bi.toDouble() / chapter.blocks.lastIndex,
-            bookProgress = (before + bi).toDouble() / total,
+            bookProgress = if (total <= 1) 0.0 else (before + bi).toDouble() / (total - 1),
         )
     }
 
@@ -56,10 +56,20 @@ object LocatorResolver {
         }
         val total = chapters.sumOf { it.blocks.size }
         if (total > 0 && locator.bookProgress > 0.0 && locator.bookProgress <= 1.0) {
-            var absolute = (locator.bookProgress * (total - 1)).toInt()
+            var absolute = kotlin.math.round(locator.bookProgress * (total - 1)).toInt()
             chapters.forEachIndexed { ci, chapter ->
                 if (absolute < chapter.blocks.size) return result(ci, absolute, 0, LocatorResolutionReason.BOOK_PROGRESS, mismatch, chapter.blocks[absolute])
                 absolute -= chapter.blocks.size
+            }
+        }
+        val quote = locator.textQuote.replace(Regex("\\s+"), " ").trim().lowercase()
+        if (quote.isNotEmpty()) {
+            chapters.forEachIndexed { ci, chapter ->
+                val bi = chapter.blocks.indexOfFirst {
+                    val text = it.text.replace(Regex("\\s+"), " ").trim().lowercase()
+                    text.contains(quote) || quote.contains(text)
+                }
+                if (bi >= 0) return result(ci, bi, 0, LocatorResolutionReason.TEXT_QUOTE, mismatch, chapter.blocks[bi])
             }
         }
         val ci = locator.chapterIndex.coerceIn(chapters.indices)

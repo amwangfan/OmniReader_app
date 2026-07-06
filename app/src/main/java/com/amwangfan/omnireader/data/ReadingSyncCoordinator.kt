@@ -26,8 +26,6 @@ class ReadingSyncCoordinator(
     private val gateway: ReadingSyncGateway,
     private val store: ReadingStateStore,
     private val identity: DeviceRegistrationRequest,
-    private val baseUrl: String,
-    private val token: String,
 ) {
     suspend fun syncBook(bookId: String): ProgressResponse {
         gateway.register(identity)
@@ -45,7 +43,7 @@ class ReadingSyncCoordinator(
             )
             val accepted = uploaded.deviceProgress?.updatedAt ?: uploaded.globalProgress
                 ?.takeIf { it.deviceId == identity.id }?.updatedAt
-            store.markClean(bookId, identity.id, accepted)
+            store.markCleanIfUnchanged(bookId, identity.id, local.generation, accepted)
         }
         return gateway.get(bookId, identity.id)
     }
@@ -56,15 +54,18 @@ class ReadingSyncCoordinator(
     }
 
     suspend fun resumeFor(bookId: String): ResumeProgress? {
-        val local = store.get(bookId, identity.id)
-        if (local?.dirty == true) {
-            return runCatching { syncBook(bookId) }.getOrNull()?.bestResume(local.locator) ?: ResumeProgress(local.locator)
-        }
+        val before = store.get(bookId, identity.id)
         val response = runCatching {
-            gateway.register(identity)
-            gateway.get(bookId, identity.id)
-        }.getOrNull() ?: return local?.let { ResumeProgress(it.locator) }
-        return response.bestResume(local?.locator)
+            if (before?.dirty == true) syncBook(bookId) else {
+                gateway.register(identity)
+                gateway.get(bookId, identity.id)
+            }
+        }.getOrNull() ?: return before?.let { ResumeProgress(it.locator) }
+        val current = store.get(bookId, identity.id)
+        if (current != null && (current.dirty || current.generation != before?.generation)) {
+            return ResumeProgress(current.locator)
+        }
+        return response.bestResume(current?.locator ?: before?.locator)
     }
 
     private fun ProgressResponse.bestResume(local: ReadingLocator?): ResumeProgress? {

@@ -117,10 +117,8 @@ data class DeviceDto(
     val manufacturer: String = "",
     val model: String = "",
     val appVersion: String = "",
-    val disabled: Boolean = false,
-    val createdAt: String = "",
-    val updatedAt: String = "",
     val lastSeenAt: String = "",
+    val disabledAt: String? = null,
 )
 
 @Serializable

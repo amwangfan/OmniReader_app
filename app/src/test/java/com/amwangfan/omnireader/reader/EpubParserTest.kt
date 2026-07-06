@@ -48,7 +48,7 @@ class EpubParserTest {
                 "OPS/chapter1.xhtml",
                 """
                 <html xmlns="http://www.w3.org/1999/xhtml">
-                  <body><h1>One</h1><p>Hello reader.</p><ul><li>Item</li></ul><blockquote>Quote</blockquote><pre>code  sample</pre></body>
+                  <body><h1>One</h1><p>Hello reader.</p><ul><li><p>Item</p></li></ul><blockquote><p>Quote</p></blockquote><pre>code  sample</pre></body>
                 </html>
                 """.trimIndent(),
             )

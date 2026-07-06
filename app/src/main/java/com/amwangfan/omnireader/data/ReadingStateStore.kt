@@ -14,6 +14,7 @@ data class ReadingStateRecord(
     val dailyReadSeconds: Map<String, Long> = emptyMap(),
     val dirty: Boolean = false,
     val lastServerUpdatedAt: String? = null,
+    val generation: Long = 0,
 )
 
 @Serializable
@@ -45,14 +46,39 @@ class ReadingStateStore(
 
     @Synchronized fun markClean(bookId: String, deviceId: String, serverUpdatedAt: String?) {
         val record = get(bookId, deviceId) ?: return
+        markCleanIfUnchanged(bookId, deviceId, record.generation, serverUpdatedAt)
+    }
+
+    @Synchronized fun markCleanIfUnchanged(bookId: String, deviceId: String, generation: Long, serverUpdatedAt: String?): Boolean {
+        val record = get(bookId, deviceId) ?: return false
+        if (record.generation != generation) return false
         put(bookId, deviceId, record.copy(dirty = false, lastServerUpdatedAt = serverUpdatedAt))
+        return true
     }
 
     @Synchronized fun mergeElapsed(bookId: String, deviceId: String, elapsed: Map<String, Long>, locator: ReadingLocator) {
         val old = get(bookId, deviceId)
         val totals = old?.dailyReadSeconds.orEmpty().toMutableMap()
         elapsed.forEach { (date, seconds) -> totals[date] = totals.getOrDefault(date, 0) + seconds.coerceAtLeast(0) }
-        put(bookId, deviceId, ReadingStateRecord(locator, totals, dirty = true, lastServerUpdatedAt = old?.lastServerUpdatedAt))
+        put(bookId, deviceId, ReadingStateRecord(locator, totals, dirty = true, lastServerUpdatedAt = old?.lastServerUpdatedAt, generation = (old?.generation ?: 0) + 1))
+    }
+
+    @Synchronized fun migrateBookId(localBookId: String, remoteBookId: String, deviceId: String) {
+        if (localBookId == remoteBookId) return
+        val source = get(localBookId, deviceId) ?: return
+        val target = get(remoteBookId, deviceId)
+        val totals = target?.dailyReadSeconds.orEmpty().toMutableMap()
+        source.dailyReadSeconds.forEach { (date, seconds) -> totals[date] = maxOf(totals.getOrDefault(date, 0), seconds) }
+        val migrated = source.copy(
+            dailyReadSeconds = totals,
+            dirty = source.dirty || target?.dirty == true,
+            generation = maxOf(source.generation, target?.generation ?: 0) + 1,
+        )
+        val localDevices = state.books[localBookId].orEmpty() - deviceId
+        var books = if (localDevices.isEmpty()) state.books - localBookId else state.books + (localBookId to localDevices)
+        books = books + (remoteBookId to (books[remoteBookId].orEmpty() + (deviceId to migrated)))
+        state = state.copy(books = books)
+        persist()
     }
 
     private fun load(): ReadingStateFile {

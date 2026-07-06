@@ -207,7 +207,9 @@ fun OmniReaderApp(viewModel: AppViewModel = viewModel()) {
                     onPrevious = viewModel::previousChapter,
                     onNext = viewModel::nextChapter,
                     onCheckpoint = viewModel::checkpointReading,
+                    onVisiblePosition = viewModel::updateVisibleReadingPosition,
                     onActiveChanged = viewModel::readerActive,
+                    onDisposed = viewModel::clearReaderAfterDispose,
                 )
             }
         }

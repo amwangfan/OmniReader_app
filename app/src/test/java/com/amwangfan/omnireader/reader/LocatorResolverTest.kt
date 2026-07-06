@@ -15,7 +15,7 @@ class LocatorResolverTest {
         assertEquals("b.xhtml", locator.chapterHref)
         assertEquals(chapters[1].blocks[1].textHash, locator.textHash)
         assertEquals(0.5, locator.chapterProgress, 0.001)
-        assertEquals(0.6, locator.bookProgress, 0.001)
+        assertEquals(0.75, locator.bookProgress, 0.001)
     }
 
     @Test fun resolve_prefersExactHrefAndHash() {
@@ -44,6 +44,24 @@ class LocatorResolverTest {
         val result = resolve(locator(href="missing", chapter=99, bookProgress=0.0))
         assertEquals(1, result.chapterIndex)
         assertEquals(LocatorResolutionReason.CHAPTER_START, result.reason)
+    }
+
+    @Test fun locatorFor_andResolve_roundTripEveryBlock() {
+        chapters.forEachIndexed { chapterIndex, chapter ->
+            chapter.blocks.indices.forEach { blockIndex ->
+                val locator = LocatorResolver.locatorFor(chapters, "rev", chapterIndex, blockIndex, 0)
+                val result = LocatorResolver.resolve(chapters, locator.copy(chapterHref="missing", chapterIndex=99, textHash=""), "rev")
+                assertEquals(chapterIndex, result.chapterIndex)
+                assertEquals(blockIndex, result.blockIndex)
+            }
+        }
+    }
+
+    @Test fun resolve_usesBoundedTextQuoteAsFinalRecoveryHint() {
+        val result = resolve(locator(href="missing", chapter=99).copy(textQuote="amm"))
+        assertEquals(1, result.chapterIndex)
+        assertEquals(1, result.blockIndex)
+        assertEquals(LocatorResolutionReason.TEXT_QUOTE, result.reason)
     }
 
     private fun resolve(locator: ReadingLocator) = LocatorResolver.resolve(chapters, locator, "rev")
