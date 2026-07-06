@@ -28,8 +28,11 @@ fun localBookForRemote(remote: BookDto, localBooks: List<LocalBook>): LocalBook?
     localBooks.firstOrNull { it.remoteBookId == remote.id }
 
 fun isUpdateAvailable(remote: BookDto, local: LocalBook): Boolean =
-    remote.contentRevision.isNotBlank() &&
+    if (remote.contentRevision.isNotBlank()) {
         remote.contentRevision != local.contentRevision
+    } else {
+        remote.checksum.isNotBlank() && remote.checksum != local.checksum
+    }
 
 @Composable
 fun BookCard(
