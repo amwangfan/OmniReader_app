@@ -1,6 +1,7 @@
 package com.amwangfan.omnireader.data
 
 import java.io.File
+import kotlin.io.path.createTempDirectory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -34,5 +35,5 @@ class ReadingStateStoreTest {
     }
 
     private fun locator() = ReadingLocator(contentRevision="r", chapterHref="c", chapterIndex=0, blockIndex=0)
-    private fun tempDir() = createTempDir(prefix = "reading-state-").apply { deleteOnExit() }
+    private fun tempDir() = createTempDirectory("reading-state-").toFile().apply { deleteOnExit() }
 }

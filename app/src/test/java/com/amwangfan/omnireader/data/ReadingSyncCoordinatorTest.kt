@@ -1,6 +1,7 @@
 package com.amwangfan.omnireader.data
 
 import kotlinx.coroutines.test.runTest
+import kotlin.io.path.createTempDirectory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -50,5 +51,5 @@ class ReadingSyncCoordinatorTest {
     }
     private fun identity()=DeviceRegistrationRequest("d","This","This",manufacturer="Onyx",model="Leaf",appVersion=".3")
     private fun locator(href:String="c")=ReadingLocator(contentRevision="r",chapterHref=href,chapterIndex=0,blockIndex=0)
-    private fun tempDir()=createTempDir(prefix="coordinator-")
+    private fun tempDir()=createTempDirectory("coordinator-").toFile()
 }
