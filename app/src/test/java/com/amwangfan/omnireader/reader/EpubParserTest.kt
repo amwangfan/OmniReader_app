@@ -31,6 +31,7 @@ class EpubParserTest {
                 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
                   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
                     <dc:title>Sample EPUB</dc:title>
+                    <dc:creator>Sample Author</dc:creator>
                   </metadata>
                   <manifest>
                     <item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
@@ -64,6 +65,7 @@ class EpubParserTest {
         val document = EpubParser().parse(epub)
 
         assertEquals("Sample EPUB", document.title)
+        assertEquals("Sample Author", document.author)
         assertEquals(listOf("One", "Two"), document.chapters.map { it.title })
         assertTrue(document.chapters[0].text.contains("Hello reader."))
         assertTrue(document.chapters[1].text.contains("Second chapter."))

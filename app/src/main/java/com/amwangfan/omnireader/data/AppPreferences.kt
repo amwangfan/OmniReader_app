@@ -23,6 +23,18 @@ class AppPreferences(context: Context) {
             prefs.edit().putString(KEY_REFRESH_TOKEN, value).apply()
         }
 
+    var defaultDownloadTreeUri: String
+        get() = prefs.getString(KEY_DEFAULT_DOWNLOAD_TREE_URI, "").orEmpty()
+        set(value) {
+            prefs.edit().putString(KEY_DEFAULT_DOWNLOAD_TREE_URI, value).apply()
+        }
+
+    var autoUploadImports: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_UPLOAD_IMPORTS, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_AUTO_UPLOAD_IMPORTS, value).apply()
+        }
+
     fun saveSession(login: LoginResponse) {
         prefs.edit()
             .putString(KEY_ACCESS_TOKEN, login.accessToken)
@@ -41,5 +53,7 @@ class AppPreferences(context: Context) {
         const val KEY_SERVER_URL = "server_url"
         const val KEY_ACCESS_TOKEN = "access_token"
         const val KEY_REFRESH_TOKEN = "refresh_token"
+        const val KEY_DEFAULT_DOWNLOAD_TREE_URI = "default_download_tree_uri"
+        const val KEY_AUTO_UPLOAD_IMPORTS = "auto_upload_imports"
     }
 }

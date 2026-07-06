@@ -1,14 +1,18 @@
 package com.amwangfan.omnireader
 
 import android.app.Application
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.amwangfan.omnireader.data.AppPreferences
 import com.amwangfan.omnireader.data.BookDto
+import com.amwangfan.omnireader.data.BookSyncState
 import com.amwangfan.omnireader.data.LocalBook
 import com.amwangfan.omnireader.data.LocalBookStore
 import com.amwangfan.omnireader.data.OmniApi
 import com.amwangfan.omnireader.data.normalizeServerBaseUrl
+import com.amwangfan.omnireader.data.resolveStorageDestination
 import com.amwangfan.omnireader.reader.EpubChapter
 import com.amwangfan.omnireader.reader.EpubParser
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,21 +31,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             serverUrl = preferences.serverUrl,
             accessToken = preferences.accessToken,
             refreshToken = preferences.refreshToken,
+            defaultDownloadTreeUri = preferences.defaultDownloadTreeUri,
+            autoUploadImports = preferences.autoUploadImports,
         ),
     )
     val uiState: StateFlow<AppUiState> = _uiState
 
     init {
-        val initialScreen = when {
-            preferences.serverUrl.isBlank() -> AppScreen.ServerConfig
-            preferences.accessToken.isBlank() -> AppScreen.Login
-            else -> AppScreen.Library
-        }
-        _uiState.update { it.copy(screen = initialScreen) }
         viewModelScope.launch {
             refreshLocalBooks()
-            if (preferences.serverUrl.isNotBlank() && preferences.accessToken.isNotBlank()) {
-                sync()
+            if (hasServerSession(_uiState.value)) {
+                setBusy(true)
+                performSync()
+                setBusy(false)
             }
         }
     }
@@ -65,8 +67,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         serverUrl = normalized,
-                        screen = if (it.accessToken.isBlank()) AppScreen.Login else AppScreen.Library,
+                        screen = AppScreen.Settings,
                         errorMessage = null,
+                        lastSyncMessage = "Server settings saved",
                     )
                 }
             }
@@ -96,7 +99,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         errorMessage = null,
                     )
                 }
-                sync()
+                performSync()
             }.onFailure { error ->
                 _uiState.update { it.copy(errorMessage = error.message ?: "Login failed") }
             }
@@ -111,14 +114,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 accessToken = "",
                 refreshToken = "",
                 remoteBooks = emptyList(),
-                screen = AppScreen.Login,
+                screen = AppScreen.Settings,
                 errorMessage = null,
+                lastSyncMessage = "Signed out",
             )
         }
     }
 
     fun showServerConfig() {
-        _uiState.update { it.copy(screen = AppScreen.ServerConfig, errorMessage = null) }
+        showSettings()
+    }
+
+    fun showSettings() {
+        _uiState.update { it.copy(screen = AppScreen.Settings, reader = null, errorMessage = null) }
     }
 
     fun showLibrary() {
@@ -134,41 +142,40 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sync() {
         viewModelScope.launch {
-            val state = _uiState.value
-            if (state.serverUrl.isBlank() || state.accessToken.isBlank()) {
+            if (!hasServerSession(_uiState.value)) {
+                _uiState.update { it.copy(errorMessage = "Configure the server and sign in first") }
                 return@launch
             }
             setBusy(true)
-            runCatching {
-                api.listBooks(state.serverUrl, state.accessToken)
-            }.onSuccess { books ->
-                _uiState.update {
-                    it.copy(
-                        remoteBooks = books,
-                        lastSyncMessage = "Synced ${books.size} books",
-                        errorMessage = null,
-                    )
-                }
-                refreshLocalBooks()
-            }.onFailure { error ->
-                _uiState.update { it.copy(errorMessage = error.message ?: "Sync failed") }
-            }
+            performSync()
             setBusy(false)
         }
     }
 
     fun download(book: BookDto) {
+        download(book, null)
+    }
+
+    fun download(book: BookDto, oneTimeTreeUri: String?) {
         viewModelScope.launch {
             val state = _uiState.value
+            if (!hasServerSession(state)) {
+                _uiState.update { it.copy(errorMessage = "Configure the server and sign in first") }
+                return@launch
+            }
             setBusy(true)
             runCatching {
-                val file = localBookStore.epubFile(book.id)
-                api.downloadBook(state.serverUrl, state.accessToken, book.id, file)
-                localBookStore.recordDownloaded(book, file)
+                val destination = resolveStorageDestination(
+                    oneTimeTreeUri,
+                    state.defaultDownloadTreeUri,
+                )
+                localBookStore.download(book, destination) { output ->
+                    api.downloadBook(state.serverUrl, state.accessToken, book.id, output)
+                }
             }.onSuccess {
                 refreshLocalBooks()
-                _uiState.update { stateNow ->
-                    stateNow.copy(lastSyncMessage = "Downloaded ${book.title}", errorMessage = null)
+                _uiState.update {
+                    it.copy(lastSyncMessage = "Downloaded " + book.title, errorMessage = null)
                 }
             }.onFailure { error ->
                 _uiState.update { it.copy(errorMessage = error.message ?: "Download failed") }
@@ -177,22 +184,118 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun openBook(book: LocalBook) {
+    fun importBook(uri: Uri) {
         viewModelScope.launch {
             setBusy(true)
+            val state = _uiState.value
             runCatching {
-                epubParser.parse(localBookStore.fileFor(book))
-            }.onSuccess { document ->
+                val resolver = getApplication<Application>().contentResolver
+                val sourceName = resolver.displayName(uri) ?: "imported.epub"
+                val source = resolver.openInputStream(uri) ?: error("Cannot open selected EPUB")
+                val destination = resolveStorageDestination(null, state.defaultDownloadTreeUri)
+                localBookStore.importBook(
+                    source = source,
+                    sourceName = sourceName,
+                    destination = destination,
+                    autoUpload = state.autoUploadImports,
+                    parser = epubParser,
+                )
+            }.onSuccess { local ->
+                refreshLocalBooks()
+                val uploaded = if (
+                    local.syncState == BookSyncState.PENDING_UPLOAD &&
+                    hasServerSession(_uiState.value)
+                ) {
+                    uploadLocalBook(local)
+                } else {
+                    false
+                }
+                refreshLocalBooks()
                 _uiState.update {
                     it.copy(
-                        screen = AppScreen.Reader,
-                        reader = ReaderUiState(title = document.title, chapters = document.chapters),
+                        lastSyncMessage = when {
+                            uploaded -> "Imported and uploaded " + local.title
+                            local.syncState == BookSyncState.PENDING_UPLOAD ->
+                                "Imported " + local.title + "; upload pending"
+                            else -> "Imported " + local.title
+                        },
                         errorMessage = null,
                     )
                 }
+                val refreshed = localBookStore.loadBooks().firstOrNull { it.id == local.id } ?: local
+                openBookInternal(refreshed)
             }.onFailure { error ->
-                _uiState.update { it.copy(errorMessage = error.message ?: "Could not open EPUB") }
+                _uiState.update { it.copy(errorMessage = error.message ?: "Import failed") }
             }
+            setBusy(false)
+        }
+    }
+
+    fun setDefaultDownloadTree(uri: String) {
+        preferences.defaultDownloadTreeUri = uri
+        _uiState.update {
+            it.copy(defaultDownloadTreeUri = uri, lastSyncMessage = "Default folder updated")
+        }
+    }
+
+    fun clearDefaultDownloadTree() {
+        preferences.defaultDownloadTreeUri = ""
+        _uiState.update {
+            it.copy(defaultDownloadTreeUri = "", lastSyncMessage = "Using app storage")
+        }
+    }
+
+    fun setAutoUploadImports(enabled: Boolean) {
+        preferences.autoUploadImports = enabled
+        _uiState.update { it.copy(autoUploadImports = enabled) }
+    }
+
+    fun requestDelete(book: LocalBook) {
+        _uiState.update { it.copy(pendingDeleteBook = book) }
+    }
+
+    fun cancelDelete() {
+        _uiState.update { it.copy(pendingDeleteBook = null) }
+    }
+
+    fun confirmDelete() {
+        val book = _uiState.value.pendingDeleteBook ?: return
+        viewModelScope.launch {
+            setBusy(true)
+            runCatching { localBookStore.delete(book.id) }
+                .onSuccess { deleted ->
+                    if (!deleted) error("Could not delete " + book.title)
+                    refreshLocalBooks()
+                    _uiState.update { state ->
+                        val wasOpen = state.reader?.localBookId == book.id
+                        state.copy(
+                            screen = if (wasOpen) AppScreen.Shelf else state.screen,
+                            reader = if (wasOpen) null else state.reader,
+                            pendingDeleteBook = null,
+                            lastSyncMessage = "Deleted " + book.title,
+                            errorMessage = null,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            pendingDeleteBook = null,
+                            errorMessage = error.message ?: "Delete failed",
+                        )
+                    }
+                }
+            setBusy(false)
+        }
+    }
+
+    fun openBook(book: LocalBook) {
+        viewModelScope.launch {
+            setBusy(true)
+            runCatching { openBookInternal(book) }
+                .onFailure { error ->
+                    _uiState.update { it.copy(errorMessage = error.message ?: "Could not open EPUB") }
+                }
             setBusy(false)
         }
     }
@@ -200,14 +303,77 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun nextChapter() {
         _uiState.update { state ->
             val reader = state.reader ?: return@update state
-            state.copy(reader = reader.copy(currentChapterIndex = (reader.currentChapterIndex + 1).coerceAtMost(reader.chapters.lastIndex)))
+            state.copy(
+                reader = reader.copy(
+                    currentChapterIndex = (reader.currentChapterIndex + 1)
+                        .coerceAtMost(reader.chapters.lastIndex),
+                ),
+            )
         }
     }
 
     fun previousChapter() {
         _uiState.update { state ->
             val reader = state.reader ?: return@update state
-            state.copy(reader = reader.copy(currentChapterIndex = (reader.currentChapterIndex - 1).coerceAtLeast(0)))
+            state.copy(
+                reader = reader.copy(
+                    currentChapterIndex = (reader.currentChapterIndex - 1).coerceAtLeast(0),
+                ),
+            )
+        }
+    }
+
+    private suspend fun performSync() {
+        val state = _uiState.value
+        if (!hasServerSession(state)) return
+        val uploadFailures = processPendingUploads(localBookStore.pendingUploads()) { book ->
+            val file = localBookStore.materialize(book)
+            val remote = api.uploadBook(state.serverUrl, state.accessToken, book.title, file)
+            localBookStore.markUploaded(book.id, remote)
+        }
+        runCatching {
+            api.listBooks(state.serverUrl, state.accessToken)
+        }.onSuccess { books ->
+            refreshLocalBooks()
+            _uiState.update {
+                it.copy(
+                    remoteBooks = books,
+                    lastSyncMessage = if (uploadFailures.isEmpty()) {
+                        "Synced " + books.size + " books"
+                    } else {
+                        "Synced; " + uploadFailures.size + " upload(s) pending"
+                    },
+                    errorMessage = null,
+                )
+            }
+        }.onFailure { error ->
+            refreshLocalBooks()
+            _uiState.update { it.copy(errorMessage = error.message ?: "Sync failed") }
+        }
+    }
+
+    private suspend fun uploadLocalBook(book: LocalBook): Boolean {
+        val state = _uiState.value
+        return runCatching {
+            val file = localBookStore.materialize(book)
+            val remote = api.uploadBook(state.serverUrl, state.accessToken, book.title, file)
+            localBookStore.markUploaded(book.id, remote)
+        }.isSuccess
+    }
+
+    private suspend fun openBookInternal(book: LocalBook) {
+        val file = localBookStore.materialize(book)
+        val document = epubParser.parse(file)
+        _uiState.update {
+            it.copy(
+                screen = AppScreen.Reader,
+                reader = ReaderUiState(
+                    localBookId = book.id,
+                    title = document.title,
+                    chapters = document.chapters,
+                ),
+                errorMessage = null,
+            )
         }
     }
 
@@ -219,10 +385,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun setBusy(value: Boolean) {
         _uiState.update { it.copy(isBusy = value) }
     }
+
+    private fun hasServerSession(state: AppUiState): Boolean =
+        state.serverUrl.isNotBlank() && state.accessToken.isNotBlank()
 }
 
 data class AppUiState(
-    val screen: AppScreen = AppScreen.ServerConfig,
+    val screen: AppScreen = AppScreen.Shelf,
     val serverUrl: String = "",
     val username: String = "admin",
     val password: String = "",
@@ -230,6 +399,9 @@ data class AppUiState(
     val refreshToken: String = "",
     val remoteBooks: List<BookDto> = emptyList(),
     val localBooks: List<LocalBook> = emptyList(),
+    val defaultDownloadTreeUri: String = "",
+    val autoUploadImports: Boolean = true,
+    val pendingDeleteBook: LocalBook? = null,
     val reader: ReaderUiState? = null,
     val isBusy: Boolean = false,
     val errorMessage: String? = null,
@@ -237,18 +409,39 @@ data class AppUiState(
 )
 
 enum class AppScreen {
-    ServerConfig,
-    Login,
     Library,
     Shelf,
+    Settings,
     Reader,
 }
 
 data class ReaderUiState(
+    val localBookId: String,
     val title: String,
     val chapters: List<EpubChapter>,
     val currentChapterIndex: Int = 0,
 ) {
     val currentChapter: EpubChapter
         get() = chapters[currentChapterIndex]
+}
+
+internal suspend fun processPendingUploads(
+    books: List<LocalBook>,
+    upload: suspend (LocalBook) -> Unit,
+): List<String> {
+    val failures = mutableListOf<String>()
+    books.forEach { book ->
+        runCatching { upload(book) }
+            .onFailure { failures += book.title }
+    }
+    return failures
+}
+
+private fun android.content.ContentResolver.displayName(uri: Uri): String? {
+    val projection = arrayOf(OpenableColumns.DISPLAY_NAME)
+    return query(uri, projection, null, null, null)?.use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (index >= 0) cursor.getString(index) else null
+    }
 }
