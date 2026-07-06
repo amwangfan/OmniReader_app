@@ -6,6 +6,9 @@ import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.security.MessageDigest
+import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -83,6 +86,7 @@ class LocalBookStore internal constructor(
                 remoteBookId = remote.id,
                 storageKind = output.storageKind,
                 documentUri = output.documentUri,
+                storageTreeUri = (destination as? StorageDestination.Tree)?.uri,
                 source = BookSource.SERVER_DOWNLOAD,
                 syncState = BookSyncState.SYNCED,
                 contentRevision = remote.contentRevision,
@@ -93,6 +97,49 @@ class LocalBookStore internal constructor(
             runCatching(output.discard)
             throw error
         }
+    }
+
+    suspend fun update(
+        remote: BookDto,
+        parser: EpubParser,
+        writer: suspend (OutputStream) -> Long,
+    ): LocalBook = withContext(Dispatchers.IO) {
+        val current = loadBooks().firstOrNull { it.remoteBookId == remote.id }
+            ?: error("Downloaded book not found: ${remote.id}")
+        val destination = when (current.storageKind) {
+            StorageKind.INTERNAL -> StorageDestination.Internal
+            StorageKind.DOCUMENT_URI -> StorageDestination.Tree(
+                current.storageTreeUri?.takeIf(String::isNotBlank)
+                    ?: error("The original download folder must be selected again before updating this book"),
+            )
+        }
+        val output = managedFiles.create(
+            destination,
+            "${remote.id}-${UUID.randomUUID()}.epub",
+        )
+        val replacement = try {
+            val size = output.outputStream.use { writer(it) }
+            val candidate = current.copy(
+                title = remote.title,
+                author = remote.author,
+                fileName = output.fileName,
+                fileSize = size,
+                checksum = remote.checksum,
+                downloadedAtEpochMillis = System.currentTimeMillis(),
+                storageKind = output.storageKind,
+                documentUri = output.documentUri,
+                storageTreeUri = (destination as? StorageDestination.Tree)?.uri,
+                contentRevision = remote.contentRevision,
+            )
+            parser.parse(managedFiles.materialize(candidate))
+            updateIndex { it.upsert(candidate) }
+            candidate
+        } catch (error: Throwable) {
+            runCatching(output.discard)
+            throw error
+        }
+        runCatching { managedFiles.delete(current) }
+        replacement
     }
 
     suspend fun importBook(
@@ -127,6 +174,7 @@ class LocalBookStore internal constructor(
                 downloadedAtEpochMillis = System.currentTimeMillis(),
                 storageKind = output.storageKind,
                 documentUri = output.documentUri,
+                storageTreeUri = (destination as? StorageDestination.Tree)?.uri,
                 source = BookSource.LOCAL_IMPORT,
                 syncState = if (autoUpload) BookSyncState.PENDING_UPLOAD else BookSyncState.LOCAL_ONLY,
             )
@@ -219,6 +267,23 @@ class LocalBookStore internal constructor(
 
     private fun writeIndex(index: LocalBookIndex) {
         indexFile.parentFile?.mkdirs()
-        indexFile.writeText(json.encodeToString(index))
+        val tempFile = File(indexFile.parentFile, "${indexFile.name}.tmp")
+        FileOutputStream(tempFile).use { stream ->
+            stream.bufferedWriter().use { output ->
+                output.write(json.encodeToString(index))
+                output.flush()
+                stream.fd.sync()
+            }
+        }
+        runCatching {
+            Files.move(
+                tempFile.toPath(),
+                indexFile.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }.getOrElse {
+            Files.move(tempFile.toPath(), indexFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 }

@@ -71,6 +71,7 @@ data class LocalBook(
     val remoteBookId: String? = null,
     val storageKind: StorageKind = StorageKind.INTERNAL,
     val documentUri: String? = null,
+    val storageTreeUri: String? = null,
     val source: BookSource = BookSource.SERVER_DOWNLOAD,
     val syncState: BookSyncState = BookSyncState.SYNCED,
     val contentRevision: String = "",
