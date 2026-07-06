@@ -163,13 +163,14 @@ class LocalBookStore internal constructor(
         updateIndex { index ->
             val current = index.books.firstOrNull { it.id == localId }
                 ?: error("Local book not found: $localId")
-            updated = current.copy(
+            val next = current.copy(
                 title = remote.title.ifBlank { current.title },
                 author = remote.author.ifBlank { current.author },
                 remoteBookId = remote.id,
                 syncState = BookSyncState.SYNCED,
             )
-            index.upsert(updated!!)
+            updated = next
+            index.upsert(next)
         }
         return checkNotNull(updated)
     }
