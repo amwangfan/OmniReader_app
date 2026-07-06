@@ -67,7 +67,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         serverUrl = normalized,
-                        screen = AppScreen.Shelf,
+                        screen = AppScreen.Settings,
                         errorMessage = null,
                         lastSyncMessage = "Server settings saved",
                     )
@@ -114,7 +114,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 accessToken = "",
                 refreshToken = "",
                 remoteBooks = emptyList(),
-                screen = AppScreen.Shelf,
+                screen = AppScreen.Settings,
                 errorMessage = null,
                 lastSyncMessage = "Signed out",
             )
@@ -122,7 +122,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun showServerConfig() {
-        _uiState.update { it.copy(screen = AppScreen.ServerConfig, errorMessage = null) }
+        showSettings()
+    }
+
+    fun showSettings() {
+        _uiState.update { it.copy(screen = AppScreen.Settings, reader = null, errorMessage = null) }
     }
 
     fun showLibrary() {
@@ -405,10 +409,9 @@ data class AppUiState(
 )
 
 enum class AppScreen {
-    ServerConfig,
-    Login,
     Library,
     Shelf,
+    Settings,
     Reader,
 }
 
