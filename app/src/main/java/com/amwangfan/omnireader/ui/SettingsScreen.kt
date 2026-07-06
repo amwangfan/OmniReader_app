@@ -12,10 +12,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Login
+import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.FolderOpen
-import androidx.compose.material.icons.outlined.Login
-import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -75,7 +75,7 @@ fun SettingsScreen(
         if (state.accessToken.isNotBlank()) {
             Text("Signed in as " + state.username)
             OutlinedButton(onClick = onLogout, enabled = !state.isBusy) {
-                Icon(Icons.Outlined.Logout, contentDescription = null)
+                Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = null)
                 Text("Sign out", modifier = Modifier.padding(start = 8.dp))
             }
         } else {
@@ -95,7 +95,7 @@ fun SettingsScreen(
                 singleLine = true,
             )
             Button(onClick = onLogin, enabled = !state.isBusy) {
-                Icon(Icons.Outlined.Login, contentDescription = null)
+                Icon(Icons.AutoMirrored.Outlined.Login, contentDescription = null)
                 Text("Sign in", modifier = Modifier.padding(start = 8.dp))
             }
         }
