@@ -48,7 +48,7 @@ class EpubParserTest {
                 "OPS/chapter1.xhtml",
                 """
                 <html xmlns="http://www.w3.org/1999/xhtml">
-                  <body><h1>One</h1><p>Hello reader.</p></body>
+                  <body><h1>One</h1><p>Hello reader.</p><ul><li>Item</li></ul><blockquote>Quote</blockquote><pre>code  sample</pre></body>
                 </html>
                 """.trimIndent(),
             )
@@ -67,8 +67,15 @@ class EpubParserTest {
         assertEquals("Sample EPUB", document.title)
         assertEquals("Sample Author", document.author)
         assertEquals(listOf("One", "Two"), document.chapters.map { it.title })
+        assertEquals(listOf("OPS/chapter1.xhtml", "OPS/text/chapter2.xhtml"), document.chapters.map { it.href })
+        assertEquals(listOf("h1", "p", "li", "blockquote", "pre"), document.chapters[0].blocks.map { it.kind })
         assertTrue(document.chapters[0].text.contains("Hello reader."))
         assertTrue(document.chapters[1].text.contains("Second chapter."))
+    }
+
+    @Test fun normalizedHash_isStableAcrossWhitespace() {
+        assertEquals(normalizedTextHash(" Hello\n reader. "), normalizedTextHash("Hello   reader."))
+        assertEquals(64, normalizedTextHash("text").length)
     }
 
     private fun ZipOutputStream.putText(path: String, text: String) {
