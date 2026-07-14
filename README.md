@@ -10,6 +10,9 @@ Native Kotlin + Jetpack Compose Android client for OmniReader.
 - Download EPUB files through `/api/v1/books/{bookId}/download` into app-local storage.
 - Show a local shelf of downloaded EPUB files.
 - Open an EPUB with a minimal spine/XHTML text reader and previous/next chapter controls.
+- Refresh expired access tokens without forcing a new login.
+- Register the Android device and synchronize chapter progress with the server.
+- Verify downloaded EPUB files with SHA-256 before publishing them to the local shelf.
 
 Rooted and non-rooted devices use the same code path for this MVP. BOOX-specific root/no-root optimizations can be added after the basic reader flow is stable.
 
@@ -31,6 +34,10 @@ The app enables cleartext HTTP traffic so it can connect to the current Tailscal
 ```text
 http://100.114.93.90:18080
 ```
+
+Use plain HTTP only through a trusted encrypted overlay such as Tailscale. Android backups are disabled so saved session tokens are not copied into device backup archives.
+
+See [the 2026-07-14 change notes](CHANGELOG.md) for the latest implementation details and remaining limitations.
 
 ## Authorship
 

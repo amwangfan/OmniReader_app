@@ -1,26 +1,34 @@
 package com.amwangfan.omnireader
 
 import android.app.Application
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.amwangfan.omnireader.data.AppPreferences
+import com.amwangfan.omnireader.data.ApiException
 import com.amwangfan.omnireader.data.BookDto
+import com.amwangfan.omnireader.data.DeviceRequest
 import com.amwangfan.omnireader.data.LocalBook
 import com.amwangfan.omnireader.data.LocalBookStore
 import com.amwangfan.omnireader.data.OmniApi
+import com.amwangfan.omnireader.data.PutProgressRequest
 import com.amwangfan.omnireader.data.normalizeServerBaseUrl
 import com.amwangfan.omnireader.reader.EpubChapter
 import com.amwangfan.omnireader.reader.EpubParser
+import java.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val preferences = AppPreferences(application)
     private val api = OmniApi()
     private val localBookStore = LocalBookStore(application)
     private val epubParser = EpubParser()
+    private val refreshMutex = Mutex()
 
     private val _uiState = MutableStateFlow(
         AppUiState(
@@ -61,11 +69,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun saveServerUrl() {
         runCatching { normalizeServerBaseUrl(_uiState.value.serverUrl) }
             .onSuccess { normalized ->
+                val serverChanged = preferences.serverUrl.isNotBlank() && preferences.serverUrl != normalized
                 preferences.serverUrl = normalized
+                if (serverChanged) {
+                    preferences.clearSession()
+                }
                 _uiState.update {
                     it.copy(
                         serverUrl = normalized,
-                        screen = if (it.accessToken.isBlank()) AppScreen.Login else AppScreen.Library,
+                        accessToken = if (serverChanged) "" else it.accessToken,
+                        refreshToken = if (serverChanged) "" else it.refreshToken,
+                        remoteBooks = if (serverChanged) emptyList() else it.remoteBooks,
+                        screen = if (serverChanged || it.accessToken.isBlank()) AppScreen.Login else AppScreen.Library,
                         errorMessage = null,
                     )
                 }
@@ -105,15 +120,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logout() {
-        preferences.clearSession()
-        _uiState.update {
-            it.copy(
-                accessToken = "",
-                refreshToken = "",
-                remoteBooks = emptyList(),
-                screen = AppScreen.Login,
-                errorMessage = null,
-            )
+        val state = _uiState.value
+        clearSession()
+        if (state.serverUrl.isNotBlank() && state.refreshToken.isNotBlank()) {
+            viewModelScope.launch {
+                runCatching { api.logout(state.serverUrl, state.refreshToken) }
+            }
         }
     }
 
@@ -140,7 +152,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             setBusy(true)
             runCatching {
-                api.listBooks(state.serverUrl, state.accessToken)
+                authenticated { token ->
+                    api.upsertDevice(
+                        state.serverUrl,
+                        token,
+                        DeviceRequest(
+                            id = preferences.deviceId,
+                            displayName = listOf(Build.MANUFACTURER, Build.MODEL)
+                                .filter { it.isNotBlank() }
+                                .joinToString(" "),
+                        ),
+                    )
+                    api.listBooks(state.serverUrl, token)
+                }
             }.onSuccess { books ->
                 _uiState.update {
                     it.copy(
@@ -149,6 +173,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         errorMessage = null,
                     )
                 }
+                refreshLocalBooks()
+                syncRemoteProgress()
                 refreshLocalBooks()
             }.onFailure { error ->
                 _uiState.update { it.copy(errorMessage = error.message ?: "Sync failed") }
@@ -163,7 +189,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             setBusy(true)
             runCatching {
                 val file = localBookStore.epubFile(book.id)
-                api.downloadBook(state.serverUrl, state.accessToken, book.id, file)
+                authenticated { token ->
+                    api.downloadBook(state.serverUrl, token, book.id, file, book.checksum)
+                }
                 localBookStore.recordDownloaded(book, file)
             }.onSuccess {
                 refreshLocalBooks()
@@ -186,7 +214,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         screen = AppScreen.Reader,
-                        reader = ReaderUiState(title = document.title, chapters = document.chapters),
+                        reader = ReaderUiState(
+                            bookId = book.id,
+                            title = document.title,
+                            chapters = document.chapters,
+                            currentChapterIndex = book.currentChapterIndex.coerceIn(0, document.chapters.lastIndex),
+                        ),
                         errorMessage = null,
                     )
                 }
@@ -198,22 +231,150 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun nextChapter() {
-        _uiState.update { state ->
-            val reader = state.reader ?: return@update state
-            state.copy(reader = reader.copy(currentChapterIndex = (reader.currentChapterIndex + 1).coerceAtMost(reader.chapters.lastIndex)))
-        }
+        moveChapter(1)
     }
 
     fun previousChapter() {
-        _uiState.update { state ->
-            val reader = state.reader ?: return@update state
-            state.copy(reader = reader.copy(currentChapterIndex = (reader.currentChapterIndex - 1).coerceAtLeast(0)))
+        moveChapter(-1)
+    }
+
+    private fun moveChapter(delta: Int) {
+        val current = _uiState.value.reader ?: return
+        val updated = current.copy(
+            currentChapterIndex = (current.currentChapterIndex + delta).coerceIn(0, current.chapters.lastIndex),
+        )
+        if (updated.currentChapterIndex == current.currentChapterIndex) {
+            return
         }
+        _uiState.update { it.copy(reader = updated) }
+        persistProgress(updated)
     }
 
     private suspend fun refreshLocalBooks() {
         val books = localBookStore.loadBooks()
         _uiState.update { it.copy(localBooks = books) }
+    }
+
+    private suspend fun syncRemoteProgress() {
+        val state = _uiState.value
+        val remoteBookIds = state.remoteBooks.mapTo(mutableSetOf()) { it.id }
+        state.localBooks.filter { it.id in remoteBookIds }.forEach { local ->
+            val remoteResult = runCatching {
+                authenticated { token -> api.getProgress(state.serverUrl, token, local.id) }
+            }
+            if (remoteResult.isFailure) {
+                return@forEach
+            }
+            val remote = remoteResult.getOrNull()
+            if (remote == null) {
+                runCatching { uploadLocalProgress(local, state.serverUrl) }
+                return@forEach
+            }
+            val remoteTime = runCatching { Instant.parse(remote.updatedAt).toEpochMilli() }.getOrDefault(0)
+            val chapterIndex = remote.locator.substringAfter("chapter:", "").toIntOrNull() ?: return@forEach
+            if (remoteTime > local.progressUpdatedAtEpochMillis) {
+                localBookStore.updateProgress(local.id, chapterIndex, remoteTime)
+            } else if (local.progressUpdatedAtEpochMillis > remoteTime) {
+                runCatching { uploadLocalProgress(local, state.serverUrl) }
+            }
+        }
+    }
+
+    private suspend fun uploadLocalProgress(local: LocalBook, serverUrl: String) {
+        if (local.progressUpdatedAtEpochMillis <= 0) {
+            return
+        }
+        authenticated { token ->
+            api.putProgress(
+                serverUrl,
+                token,
+                local.id,
+                PutProgressRequest(
+                    deviceId = preferences.deviceId,
+                    locator = "chapter:${local.currentChapterIndex}",
+                    updatedAt = Instant.ofEpochMilli(local.progressUpdatedAtEpochMillis).toString(),
+                ),
+            )
+        }
+    }
+
+    private fun persistProgress(reader: ReaderUiState) {
+        val updatedAt = System.currentTimeMillis()
+        viewModelScope.launch {
+            localBookStore.updateProgress(reader.bookId, reader.currentChapterIndex, updatedAt)
+            refreshLocalBooks()
+            val result = runCatching {
+                authenticated { token ->
+                    api.putProgress(
+                        _uiState.value.serverUrl,
+                        token,
+                        reader.bookId,
+                        PutProgressRequest(
+                            deviceId = preferences.deviceId,
+                            locator = "chapter:${reader.currentChapterIndex}",
+                            percentage = (reader.currentChapterIndex + 1).toDouble() / reader.chapters.size,
+                            updatedAt = Instant.ofEpochMilli(updatedAt).toString(),
+                        ),
+                    )
+                }
+            }
+            if (result.isFailure) {
+                _uiState.update {
+                    it.copy(errorMessage = "Progress saved locally; server upload will be retried on the next sync")
+                }
+            }
+        }
+    }
+
+    private suspend fun <T> authenticated(block: suspend (String) -> T): T {
+        val initial = _uiState.value
+        try {
+            return block(initial.accessToken)
+        } catch (error: ApiException) {
+            if (error.statusCode != 401) {
+                throw error
+            }
+        }
+        return refreshMutex.withLock {
+            val current = _uiState.value
+            if (current.accessToken.isNotBlank() && current.accessToken != initial.accessToken) {
+                return@withLock block(current.accessToken)
+            }
+            if (current.refreshToken.isBlank()) {
+                clearSession("Session expired. Please log in again.")
+                throw ApiException(401, "Session expired")
+            }
+            val refreshed = try {
+                api.refresh(current.serverUrl, current.refreshToken)
+            } catch (error: Throwable) {
+                clearSession("Session expired. Please log in again.")
+                throw error
+            }
+            preferences.updateAccessToken(refreshed.accessToken)
+            _uiState.update { it.copy(accessToken = refreshed.accessToken, errorMessage = null) }
+            try {
+                block(refreshed.accessToken)
+            } catch (error: ApiException) {
+                if (error.statusCode == 401) {
+                    clearSession("Session expired. Please log in again.")
+                }
+                throw error
+            }
+        }
+    }
+
+    private fun clearSession(message: String? = null) {
+        preferences.clearSession()
+        _uiState.update {
+            it.copy(
+                accessToken = "",
+                refreshToken = "",
+                remoteBooks = emptyList(),
+                screen = AppScreen.Login,
+                reader = null,
+                errorMessage = message,
+            )
+        }
     }
 
     private fun setBusy(value: Boolean) {
@@ -245,6 +406,7 @@ enum class AppScreen {
 }
 
 data class ReaderUiState(
+    val bookId: String,
     val title: String,
     val chapters: List<EpubChapter>,
     val currentChapterIndex: Int = 0,

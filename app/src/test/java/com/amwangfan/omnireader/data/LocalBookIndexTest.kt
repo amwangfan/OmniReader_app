@@ -56,4 +56,14 @@ class LocalBookIndexTest {
 
         assertEquals(index, decoded)
     }
+
+    @Test
+    fun localBookIndex_readsLegacyEntriesWithoutProgressFields() {
+        val decoded = Json.decodeFromString<LocalBookIndex>(
+            `{"books":[{"id":"book_1","title":"Book","fileName":"book_1.epub","fileSize":42,"checksum":"sum","downloadedAtEpochMillis":3}]}`,
+        )
+
+        assertEquals(0, decoded.books.single().currentChapterIndex)
+        assertEquals(0, decoded.books.single().progressUpdatedAtEpochMillis)
+    }
 }

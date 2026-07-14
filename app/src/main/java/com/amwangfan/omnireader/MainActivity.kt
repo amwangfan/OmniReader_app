@@ -3,6 +3,7 @@ package com.amwangfan.omnireader
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -336,7 +336,7 @@ private fun RemoteBookRow(
 private fun LocalBookRow(book: LocalBook, onOpen: () -> Unit) {
     BookCard(
         title = book.title,
-        subtitle = metadata(book.author, book.fileSize),
+        subtitle = metadata(book.author, book.fileSize) + " · Chapter ${book.currentChapterIndex + 1}",
         action = {
             Button(onClick = onOpen) { Text("Read") }
         },
@@ -379,6 +379,7 @@ private fun ReaderScreen(
         EmptyMessage("No book is open.")
         return
     }
+    val chapterScrollState = remember(reader.currentChapterIndex) { ScrollState(0) }
     Column(
         modifier = Modifier
             .padding(padding)
@@ -395,7 +396,7 @@ private fun ReaderScreen(
             reader.currentChapter.text,
             modifier = Modifier
                 .weight(1f)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(chapterScrollState),
             style = MaterialTheme.typography.bodyLarge,
         )
         Row(
