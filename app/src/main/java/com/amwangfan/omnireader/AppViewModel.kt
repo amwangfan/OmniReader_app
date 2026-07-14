@@ -23,6 +23,7 @@ import com.amwangfan.omnireader.reader.EpubParser
 import com.amwangfan.omnireader.reader.LocatorResolutionReason
 import com.amwangfan.omnireader.reader.LocatorResolver
 import com.amwangfan.omnireader.reader.ReadingTimeTracker
+import com.amwangfan.omnireader.sync.BackgroundSyncWorker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -58,6 +59,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<AppUiState> = _uiState
 
     init {
+        BackgroundSyncWorker.schedule(application)
         viewModelScope.launch {
             refreshLocalBooks()
             if (hasServerSession(_uiState.value)) {
