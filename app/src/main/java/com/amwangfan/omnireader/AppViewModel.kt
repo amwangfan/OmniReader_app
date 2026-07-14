@@ -15,6 +15,10 @@ import com.amwangfan.omnireader.data.PutProgressRequest
 import com.amwangfan.omnireader.data.normalizeServerBaseUrl
 import com.amwangfan.omnireader.reader.EpubChapter
 import com.amwangfan.omnireader.reader.EpubParser
+import com.amwangfan.omnireader.sync.BackgroundSyncWorker
+import com.amwangfan.omnireader.sync.ProgressSyncAction
+import com.amwangfan.omnireader.sync.chapterIndexFromLocator
+import com.amwangfan.omnireader.sync.decideProgressSync
 import java.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +44,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<AppUiState> = _uiState
 
     init {
+        BackgroundSyncWorker.schedule(application)
         val initialScreen = when {
             preferences.serverUrl.isBlank() -> AppScreen.ServerConfig
             preferences.accessToken.isBlank() -> AppScreen.Login
@@ -270,12 +275,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 runCatching { uploadLocalProgress(local, state.serverUrl) }
                 return@forEach
             }
-            val remoteTime = runCatching { Instant.parse(remote.updatedAt).toEpochMilli() }.getOrDefault(0)
-            val chapterIndex = remote.locator.substringAfter("chapter:", "").toIntOrNull() ?: return@forEach
-            if (remoteTime > local.progressUpdatedAtEpochMillis) {
-                localBookStore.updateProgress(local.id, chapterIndex, remoteTime)
-            } else if (local.progressUpdatedAtEpochMillis > remoteTime) {
-                runCatching { uploadLocalProgress(local, state.serverUrl) }
+            val remoteTime = runCatching { Instant.parse(remote.updatedAt).toEpochMilli() }.getOrNull()
+                ?: return@forEach
+            when (decideProgressSync(local.progressUpdatedAtEpochMillis, remoteTime)) {
+                ProgressSyncAction.PullRemote -> {
+                    val chapterIndex = chapterIndexFromLocator(remote.locator) ?: return@forEach
+                    localBookStore.updateProgress(local.id, chapterIndex, remoteTime)
+                }
+                ProgressSyncAction.PushLocal -> runCatching { uploadLocalProgress(local, state.serverUrl) }
+                ProgressSyncAction.None -> Unit
             }
         }
     }

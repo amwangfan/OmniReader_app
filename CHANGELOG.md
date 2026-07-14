@@ -13,6 +13,8 @@
 - Serialized and atomic local-book index updates.
 - Saved chapter display on the local shelf.
 - A GitHub Actions workflow for unit testing and building a debug APK on test branches and pull requests.
+- Network-constrained periodic background synchronization every six hours through WorkManager.
+- A shared, unit-tested last-write-wins progress policy used by foreground and background synchronization.
 
 ### Changed
 
@@ -24,6 +26,5 @@
 ### Remaining
 
 - Progress currently uses chapter indexes, not a Readium-compatible locator or within-chapter scroll position.
-- Periodic WorkManager synchronization is not implemented yet.
 - Tokens remain stored in app-private preferences; a Keystore-backed credential layer is still recommended.
 - HTTPS certificate handling and release signing are not implemented yet.
