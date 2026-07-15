@@ -1,44 +1,89 @@
 # OmniReader Android
 
-Native Kotlin + Jetpack Compose Android client for OmniReader.
+Native Kotlin and Jetpack Compose client for the self-hosted [OmniReader server](https://github.com/amwangfan/OmniReader).
 
-## MVP scope
+> Development status (2026-07-15): the latest Android work is in [Draft PR #1](https://github.com/amwangfan/OmniReader_app/pull/1) on `agent/android-sync-preview`. It builds and passes unit tests, but has not been exercised on an emulator or physical device. The corresponding server work is [OmniReader Draft PR #2](https://github.com/amwangfan/OmniReader/pull/2).
 
-- Configure a self-hosted OmniReader server URL.
-- Log in with the server admin account through `/api/v1/auth/login`.
-- Sync the EPUB library from `/api/v1/books`.
-- Download EPUB files through `/api/v1/books/{bookId}/download` into app-local storage.
-- Show a local shelf of downloaded EPUB files.
-- Open an EPUB with a minimal spine/XHTML text reader and previous/next chapter controls.
-- Refresh expired access tokens without forcing a new login.
-- Register the Android device and synchronize chapter progress with the server.
-- Verify downloaded EPUB files with SHA-256 before publishing them to the local shelf.
+Read [HANDOFF.md](HANDOFF.md) before continuing or merging.
 
-Rooted and non-rooted devices use the same code path for this MVP. BOOX-specific root/no-root optimizations can be added after the basic reader flow is stable.
+## Implemented on the preview branch
 
-## Build
+- Configure one self-hosted OmniReader server and log in.
+- Refresh expired access tokens and revoke the refresh session on logout.
+- List server books and download normalized EPUB files.
+- Download through a temporary file, verify SHA-256 and atomically publish to app-local storage.
+- Show a local shelf and open books in a minimal spine/XHTML text reader.
+- Persist the current chapter and resume it after reopening.
+- Register a stable device identity and reconcile progress with the server.
+- Schedule network-constrained WorkManager synchronization every six hours.
+- Retry transient background failures and clear an invalid session.
+- Disable Android backup to reduce accidental token export.
+
+The server may accept EPUB, MOBI, AZW/AZW3, TXT, PDF and HTML inputs, but it converts non-EPUB files before the app downloads them. This app is EPUB-only.
+
+## Requirements and build
+
+- Android SDK 35.
+- JDK 17.
+- Gradle 8.10.2 is downloaded by the wrapper.
+- Minimum Android version: API 26.
+- Target Android version: API 35.
+
+Linux/macOS:
+
+```bash
+chmod +x gradlew
+./gradlew testDebugUnitTest assembleDebug
+```
+
+Windows:
 
 ```powershell
-cd E:\Codex\Projects\OmniReader_app
 .\gradlew.bat testDebugUnitTest assembleDebug
 ```
 
-The debug APK is written to:
+The Debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
-```text
-app\build\outputs\apk\debug\app-debug.apk
-```
+## Server configuration and security
 
-The app enables cleartext HTTP traffic so it can connect to the current Tailscale demo server:
+Enter the URL of a running OmniReader server in the app. Cleartext HTTP is enabled only to support private-network testing. Use it exclusively over a trusted encrypted overlay such as Tailscale. Use HTTPS for any internet-reachable deployment.
 
-```text
-http://100.114.93.90:18080
-```
+No active demo address is documented because no temporary deployment has been verified. Android backup is disabled, but tokens remain in app-private preferences rather than Keystore-backed encrypted storage.
 
-Use plain HTTP only through a trusted encrypted overlay such as Tailscale. Android backups are disabled so saved session tokens are not copied into device backup archives.
+## Verification status
 
-See [the 2026-07-14 change notes](CHANGELOG.md) for the latest implementation details and remaining limitations.
+The preview branch has passed:
+
+- `testDebugUnitTest`;
+- `assembleDebug`;
+- unit tests covering local-index compatibility and progress conflict decisions.
+
+Latest recorded Android run: [GitHub Actions run 29303113280](https://github.com/amwangfan/OmniReader_app/actions/runs/29303113280).
+
+The following remain unverified:
+
+- installation and interaction on an emulator or physical device;
+- login/download/read/resume against a running preview server;
+- token expiry and refresh on a real runtime;
+- manual and six-hour background synchronization;
+- two-device conflict behavior;
+- interrupted download and checksum-failure UI.
+
+Keep PR #1 as Draft until these checks are completed.
+
+## Important limitations
+
+- Reading position is a chapter index only; there is no within-chapter scroll restoration.
+- EPUB rendering is minimal and does not fully support CSS, images, links, footnotes or advanced layout.
+- There is no table-of-contents UI, typography/theme configuration, bookmark, highlight or note support.
+- Foreground and WorkManager synchronization still need a process-wide coordinator/file lock.
+- Local delete, re-download, repair and server-archived-book status flows are not implemented.
+- Release signing and an upgrade distribution mechanism are not configured.
+
+## Project handoff
+
+[HANDOFF.md](HANDOFF.md) contains the Android code map, validation matrix, known risks and recommended continuation order. The cross-repository source of truth is [the server handoff](https://github.com/amwangfan/OmniReader/blob/agent/server-sync-hardening/docs/HANDOFF.md).
 
 ## Authorship
 
-This project is authored and owned by the repository owner's GitHub account. Codex is used as an end-to-end engineering assistant, but Codex is not the code author.
+The project and commits belong to the repository owner's GitHub identity. Codex has been used as an engineering assistant; it is not presented as the code author.
