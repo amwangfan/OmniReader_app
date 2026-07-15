@@ -1,5 +1,15 @@
 # OmniReader Android changes
 
+## 2026-07-15
+
+### Documentation and handoff
+
+- Rewrote the README as an environment-independent build and project-status entry point.
+- Removed the unverified hard-coded demo server address.
+- Added `HANDOFF.md` with the client code map, completed modifications, validation matrix, runtime risks, end-to-end checklist and continuation order.
+- Linked the Android state to the matching server Draft PR and cross-repository handoff.
+- No Android runtime behavior changed in this documentation-only update.
+
 ## 2026-07-14
 
 ### Added
