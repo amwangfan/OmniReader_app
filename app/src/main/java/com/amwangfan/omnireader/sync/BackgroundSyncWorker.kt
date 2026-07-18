@@ -70,16 +70,8 @@ class BackgroundSyncWorker(
 
     private suspend fun <T> authenticated(block: suspend (String) -> T): T {
         val token = preferences.accessToken
-        try {
-            return block(token)
-        } catch (error: ApiException) {
-            if (error.statusCode != 401) throw error
-        }
-        val refreshToken = preferences.refreshToken
-        if (refreshToken.isBlank()) throw ApiException(401, "Session expired")
-        val refreshed = api.refresh(preferences.serverUrl, refreshToken)
-        preferences.updateAccessToken(refreshed.accessToken)
-        return block(refreshed.accessToken)
+        if (token.isBlank()) throw ApiException(401, "Session expired")
+        return block(token)
     }
 
     companion object {
