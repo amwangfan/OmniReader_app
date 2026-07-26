@@ -3,6 +3,7 @@ name: Android tests
 on:
   push:
     branches:
+      - "main"
       - "agent/**"
       - "feature/**"
   pull_request:
