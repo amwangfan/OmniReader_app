@@ -97,4 +97,12 @@ class LocalBookIndexTest {
 
         assertEquals(index, decoded)
     }
+
+    @Test
+    fun legacyLocalBook_defaultsContentRevision() {
+        val decoded = Json.decodeFromString<LocalBook>(
+            """{"id":"b","title":"Book","fileName":"b.epub","fileSize":1,"checksum":"sum","downloadedAtEpochMillis":2}""",
+        )
+        assertEquals("", decoded.contentRevision)
+    }
 }

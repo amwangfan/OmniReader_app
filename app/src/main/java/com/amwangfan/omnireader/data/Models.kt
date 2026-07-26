@@ -27,6 +27,7 @@ data class BookDto(
     val checksum: String,
     val createdAt: String,
     val updatedAt: String,
+    val contentRevision: String = "",
 )
 
 @Serializable
@@ -70,8 +71,10 @@ data class LocalBook(
     val remoteBookId: String? = null,
     val storageKind: StorageKind = StorageKind.INTERNAL,
     val documentUri: String? = null,
+    val storageTreeUri: String? = null,
     val source: BookSource = BookSource.SERVER_DOWNLOAD,
     val syncState: BookSyncState = BookSyncState.SYNCED,
+    val contentRevision: String = "",
 ) {
     fun normalized(): LocalBook =
         if (source == BookSource.SERVER_DOWNLOAD && remoteBookId == null) {
@@ -80,6 +83,72 @@ data class LocalBook(
             this
         }
 }
+
+@Serializable
+data class ReadingLocator(
+    val version: Int = 1,
+    val contentRevision: String,
+    val chapterHref: String,
+    val chapterIndex: Int,
+    val blockIndex: Int,
+    val charOffset: Int = 0,
+    val textQuote: String = "",
+    val textHash: String = "",
+    val chapterProgress: Double = 0.0,
+    val bookProgress: Double = 0.0,
+)
+
+@Serializable
+data class DeviceRegistrationRequest(
+    val id: String,
+    val displayName: String,
+    val systemName: String,
+    val platform: String = "android",
+    val manufacturer: String,
+    val model: String,
+    val appVersion: String,
+)
+
+@Serializable
+data class DeviceDto(
+    val id: String,
+    val displayName: String,
+    val systemName: String = "",
+    val platform: String = "android",
+    val manufacturer: String = "",
+    val model: String = "",
+    val appVersion: String = "",
+    val lastSeenAt: String = "",
+    val disabledAt: String? = null,
+)
+
+@Serializable
+data class ProgressPutRequest(
+    val deviceId: String,
+    val locator: ReadingLocator,
+    val percentage: Double? = null,
+    val clientUpdatedAt: String? = null,
+    val dailyReadSeconds: Map<String, Long> = emptyMap(),
+)
+
+@Serializable
+data class ProgressDto(
+    val bookId: String = "",
+    val deviceId: String,
+    val deviceName: String = "",
+    val locator: ReadingLocator,
+    val percentage: Double? = null,
+    val clientUpdatedAt: String? = null,
+    val updatedAt: String,
+    val revisionMismatch: Boolean = false,
+)
+
+@Serializable
+data class ProgressResponse(
+    val deviceProgress: ProgressDto? = null,
+    val globalProgress: ProgressDto? = null,
+    val contentRevision: String = "",
+)
 
 @Serializable
 data class LocalBookIndex(

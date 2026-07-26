@@ -11,10 +11,24 @@ import com.amwangfan.omnireader.data.BookSyncState
 import com.amwangfan.omnireader.data.LocalBook
 import com.amwangfan.omnireader.data.LocalBookStore
 import com.amwangfan.omnireader.data.OmniApi
+import com.amwangfan.omnireader.data.DeviceIdentityProvider
+import com.amwangfan.omnireader.data.OmniReadingSyncGateway
+import com.amwangfan.omnireader.data.ReadingStateRecord
+import com.amwangfan.omnireader.data.ReadingStateStore
+import com.amwangfan.omnireader.data.ReadingSyncCoordinator
 import com.amwangfan.omnireader.data.normalizeServerBaseUrl
 import com.amwangfan.omnireader.data.resolveStorageDestination
 import com.amwangfan.omnireader.reader.EpubChapter
 import com.amwangfan.omnireader.reader.EpubParser
+import com.amwangfan.omnireader.reader.LocatorResolutionReason
+import com.amwangfan.omnireader.reader.LocatorResolver
+import com.amwangfan.omnireader.reader.ReadingTimeTracker
+import com.amwangfan.omnireader.sync.BackgroundSyncWorker
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -25,6 +39,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val api = OmniApi()
     private val localBookStore = LocalBookStore(application)
     private val epubParser = EpubParser()
+    private val identity = DeviceIdentityProvider(application, preferences).current()
+    private val readingIo = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "omnireader-reading-state")
+    }.asCoroutineDispatcher()
+    private val readingStateStore by lazy { ReadingStateStore(application.filesDir) }
+    private val readingTimeTracker = ReadingTimeTracker()
+    private var checkpointUpload: Job? = null
 
     private val _uiState = MutableStateFlow(
         AppUiState(
@@ -38,6 +59,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<AppUiState> = _uiState
 
     init {
+        BackgroundSyncWorker.schedule(application)
         viewModelScope.launch {
             refreshLocalBooks()
             if (hasServerSession(_uiState.value)) {
@@ -126,17 +148,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun showSettings() {
-        _uiState.update { it.copy(screen = AppScreen.Settings, reader = null, errorMessage = null) }
+        leaveReader(AppScreen.Settings)
     }
 
     fun showLibrary() {
-        _uiState.update { it.copy(screen = AppScreen.Library, reader = null, errorMessage = null) }
+        leaveReader(AppScreen.Library)
     }
 
     fun showShelf() {
+        leaveReader(AppScreen.Shelf)
         viewModelScope.launch {
             refreshLocalBooks()
-            _uiState.update { it.copy(screen = AppScreen.Shelf, reader = null, errorMessage = null) }
         }
     }
 
@@ -260,6 +282,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun confirmDelete() {
         val book = _uiState.value.pendingDeleteBook ?: return
+        if (_uiState.value.reader?.localBookId == book.id) checkpointCurrent(stopTimer = true)
         viewModelScope.launch {
             setBusy(true)
             runCatching { localBookStore.delete(book.id) }
@@ -270,7 +293,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         val wasOpen = state.reader?.localBookId == book.id
                         state.copy(
                             screen = if (wasOpen) AppScreen.Shelf else state.screen,
-                            reader = if (wasOpen) null else state.reader,
+                            reader = state.reader,
                             pendingDeleteBook = null,
                             lastSyncMessage = "Deleted " + book.title,
                             errorMessage = null,
@@ -301,26 +324,105 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun nextChapter() {
+        checkpointCurrent(stopTimer = false)
         _uiState.update { state ->
             val reader = state.reader ?: return@update state
             state.copy(
                 reader = reader.copy(
                     currentChapterIndex = (reader.currentChapterIndex + 1)
                         .coerceAtMost(reader.chapters.lastIndex),
+                    initialBlockIndex = 0,
+                    initialScrollOffset = 0,
+                    positionVersion = reader.positionVersion + 1,
                 ),
             )
         }
+        checkpointReading(0, 0)
     }
 
     fun previousChapter() {
+        checkpointCurrent(stopTimer = false)
         _uiState.update { state ->
             val reader = state.reader ?: return@update state
             state.copy(
                 reader = reader.copy(
                     currentChapterIndex = (reader.currentChapterIndex - 1).coerceAtLeast(0),
+                    initialBlockIndex = 0,
+                    initialScrollOffset = 0,
+                    positionVersion = reader.positionVersion + 1,
                 ),
             )
         }
+        checkpointReading(0, 0)
+    }
+
+    fun updateBook(book: BookDto, fallbackTreeUri: String? = null) {
+        viewModelScope.launch {
+            val state = _uiState.value
+            if (!hasServerSession(state)) {
+                _uiState.update { it.copy(errorMessage = "Configure the server and sign in first") }
+                return@launch
+            }
+            setBusy(true)
+            try {
+                localBookStore.update(book, epubParser, fallbackTreeUri) { output ->
+                    api.downloadBook(state.serverUrl, state.accessToken, book.id, output)
+                }
+                refreshLocalBooks()
+                _uiState.update {
+                    it.copy(lastSyncMessage = "Updated " + book.title, errorMessage = null)
+                }
+            } catch (error: Throwable) {
+                _uiState.update { it.copy(errorMessage = error.message ?: "Update failed") }
+            } finally {
+                setBusy(false)
+            }
+        }
+    }
+
+    fun checkpointReading(blockIndex: Int, charOffset: Int) {
+        val reader = _uiState.value.reader ?: return
+        val locator = LocatorResolver.locatorFor(
+            reader.chapters,
+            reader.contentRevision,
+            reader.currentChapterIndex,
+            blockIndex,
+            charOffset,
+        )
+        val elapsed = readingTimeTracker.checkpoint()
+        _uiState.update { state ->
+            val current = state.reader
+            if (current?.localBookId != reader.localBookId) state else state.copy(
+                reader = current.copy(initialBlockIndex = blockIndex, initialScrollOffset = charOffset, positionChanged = false),
+            )
+        }
+        viewModelScope.launch(readingIo) {
+            readingStateStore.mergeElapsed(reader.progressBookId, identity.id, elapsed, locator)
+            scheduleProgressUpload(reader.progressBookId)
+        }
+    }
+
+    fun updateVisibleReadingPosition(blockIndex: Int, scrollOffset: Int) {
+        _uiState.update { state ->
+            val reader = state.reader ?: return@update state
+            state.copy(reader = reader.withVisiblePosition(blockIndex, scrollOffset))
+        }
+    }
+
+    fun readerActive(active: Boolean) {
+        if (active && _uiState.value.screen == AppScreen.Reader) {
+            readingTimeTracker.start()
+        } else if (!active) {
+            checkpointCurrent(stopTimer = true)
+        }
+    }
+
+    fun consumeReaderNotice() {
+        _uiState.update { it.copy(readerNotice = null) }
+    }
+
+    fun clearReaderAfterDispose() {
+        _uiState.update { if (it.screen == AppScreen.Reader) it else it.copy(reader = null) }
     }
 
     private suspend fun performSync() {
@@ -330,7 +432,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val file = localBookStore.materialize(book)
             val remote = api.uploadBook(state.serverUrl, state.accessToken, book.title, file)
             localBookStore.markUploaded(book.id, remote)
+            withContext(readingIo) {
+                readingStateStore.migrateBookId(book.id, remote.id, identity.id, remote.contentRevision)
+            }
         }
+        runCatching { withContext(readingIo) { coordinator(state)?.syncAllDirty() } }
         runCatching {
             api.listBooks(state.serverUrl, state.accessToken)
         }.onSuccess { books ->
@@ -358,12 +464,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val file = localBookStore.materialize(book)
             val remote = api.uploadBook(state.serverUrl, state.accessToken, book.title, file)
             localBookStore.markUploaded(book.id, remote)
+            withContext(readingIo) {
+                readingStateStore.migrateBookId(book.id, remote.id, identity.id, remote.contentRevision)
+                runCatching { coordinator(state)?.syncBook(remote.id) }
+            }
         }.isSuccess
     }
 
     private suspend fun openBookInternal(book: LocalBook) {
         val file = localBookStore.materialize(book)
         val document = epubParser.parse(file)
+        val progressBookId = book.remoteBookId ?: book.id
+        val local = withContext(readingIo) { readingStateStore.get(progressBookId, identity.id) }
+        val localResolution = local?.let { LocatorResolver.resolve(document.chapters, it.locator, book.contentRevision) }
         _uiState.update {
             it.copy(
                 screen = AppScreen.Reader,
@@ -371,10 +484,101 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     localBookId = book.id,
                     title = document.title,
                     chapters = document.chapters,
+                    progressBookId = progressBookId,
+                    contentRevision = book.contentRevision,
+                    currentChapterIndex = localResolution?.chapterIndex ?: 0,
+                    initialBlockIndex = localResolution?.blockIndex ?: 0,
+                    initialScrollOffset = localResolution?.charOffset ?: 0,
                 ),
+                readerNotice = localResolution?.takeIf { resolution -> resolution.revisionMismatch }
+                    ?.let { "The book changed; restored the closest saved position." },
                 errorMessage = null,
             )
         }
+        if (book.remoteBookId != null && hasServerSession(_uiState.value)) {
+            viewModelScope.launch { loadRemoteResume(book, document.chapters) }
+        }
+    }
+
+    private suspend fun loadRemoteResume(book: LocalBook, chapters: List<EpubChapter>) {
+        val state = _uiState.value
+        val resume = withContext(readingIo) {
+            coordinator(state)?.resumeFor(book.remoteBookId ?: return@withContext null)
+        } ?: return
+        val activeReader = _uiState.value.reader
+        if (activeReader?.localBookId != book.id) return
+        val elapsedWhileWaiting = readingTimeTracker.checkpoint()
+        if (activeReader.positionChanged || elapsedWhileWaiting.isNotEmpty()) {
+            val localLocator = LocatorResolver.locatorFor(
+                activeReader.chapters,
+                activeReader.contentRevision,
+                activeReader.currentChapterIndex,
+                activeReader.initialBlockIndex,
+                activeReader.initialScrollOffset,
+            )
+            withContext(readingIo) {
+                readingStateStore.mergeElapsed(activeReader.progressBookId, identity.id, elapsedWhileWaiting, localLocator)
+            }
+            return
+        }
+        val resolved = LocatorResolver.resolve(chapters, resume.locator, book.contentRevision)
+        _uiState.update { current ->
+            val reader = current.reader
+            if (reader?.localBookId != book.id) current else current.copy(
+                reader = reader.copy(
+                    currentChapterIndex = resolved.chapterIndex,
+                    initialBlockIndex = resolved.blockIndex,
+                    initialScrollOffset = resolved.charOffset,
+                    positionVersion = reader.positionVersion + 1,
+                ),
+                readerNotice = when {
+                    resume.sourceDeviceName != null && (resume.revisionMismatch || resolved.revisionMismatch) ->
+                        "Resumed from ${resume.sourceDeviceName}; the book changed, so the closest position was used."
+                    resume.sourceDeviceName != null -> "Resumed from ${resume.sourceDeviceName}."
+                    resume.revisionMismatch || resolved.revisionMismatch -> "The book changed; restored the closest saved position."
+                    resolved.reason != LocatorResolutionReason.EXACT -> "Restored the closest saved position."
+                    else -> null
+                },
+            )
+        }
+    }
+
+    private fun coordinator(state: AppUiState): ReadingSyncCoordinator? {
+        if (!hasServerSession(state)) return null
+        val gateway = OmniReadingSyncGateway(api, state.serverUrl, state.accessToken)
+        return ReadingSyncCoordinator(gateway, readingStateStore, identity)
+    }
+
+    private fun scheduleProgressUpload(bookId: String) {
+        checkpointUpload?.cancel()
+        checkpointUpload = viewModelScope.launch {
+            delay(900)
+            val state = _uiState.value
+            runCatching { withContext(readingIo) { coordinator(state)?.syncBook(bookId) } }
+        }
+    }
+
+    private fun checkpointCurrent(stopTimer: Boolean) {
+        val reader = _uiState.value.reader ?: return
+        val locator = LocatorResolver.locatorFor(
+            reader.chapters,
+            reader.contentRevision,
+            reader.currentChapterIndex,
+            reader.initialBlockIndex,
+            reader.initialScrollOffset,
+        )
+        val elapsed = if (stopTimer) readingTimeTracker.stop() else readingTimeTracker.checkpoint()
+        if (elapsed.isNotEmpty() || reader.positionChanged) {
+            viewModelScope.launch(readingIo) {
+                readingStateStore.mergeElapsed(reader.progressBookId, identity.id, elapsed, locator)
+                if (stopTimer) scheduleProgressUpload(reader.progressBookId)
+            }
+        }
+    }
+
+    private fun leaveReader(target: AppScreen) {
+        if (_uiState.value.screen == AppScreen.Reader) checkpointCurrent(stopTimer = true)
+        _uiState.update { it.copy(screen = target, errorMessage = null) }
     }
 
     private suspend fun refreshLocalBooks() {
@@ -388,6 +592,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun hasServerSession(state: AppUiState): Boolean =
         state.serverUrl.isNotBlank() && state.accessToken.isNotBlank()
+
+    override fun onCleared() {
+        readingIo.close()
+        super.onCleared()
+    }
 }
 
 data class AppUiState(
@@ -406,6 +615,7 @@ data class AppUiState(
     val isBusy: Boolean = false,
     val errorMessage: String? = null,
     val lastSyncMessage: String? = null,
+    val readerNotice: String? = null,
 )
 
 enum class AppScreen {
@@ -419,11 +629,23 @@ data class ReaderUiState(
     val localBookId: String,
     val title: String,
     val chapters: List<EpubChapter>,
+    val progressBookId: String,
+    val contentRevision: String = "",
     val currentChapterIndex: Int = 0,
+    val initialBlockIndex: Int = 0,
+    val initialScrollOffset: Int = 0,
+    val positionVersion: Int = 0,
+    val positionChanged: Boolean = false,
 ) {
     val currentChapter: EpubChapter
         get() = chapters[currentChapterIndex]
 }
+
+internal fun ReaderUiState.withVisiblePosition(blockIndex: Int, scrollOffset: Int): ReaderUiState = copy(
+    initialBlockIndex = blockIndex,
+    initialScrollOffset = scrollOffset,
+    positionChanged = true,
+)
 
 internal suspend fun processPendingUploads(
     books: List<LocalBook>,

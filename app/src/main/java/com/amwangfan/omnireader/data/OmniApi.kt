@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -15,7 +16,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 class OmniApi(
     private val client: OkHttpClient = OkHttpClient(),
-    private val json: Json = Json { ignoreUnknownKeys = true },
+    private val json: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = true },
 ) {
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
@@ -108,6 +109,56 @@ class OmniApi(
             json.decodeFromString<BookResponse>(body).book
         }
     }
+
+    suspend fun registerDevice(
+        baseUrl: String,
+        token: String,
+        registration: DeviceRegistrationRequest,
+    ): DeviceDto = withContext(Dispatchers.IO) {
+        val request = authorizedBuilder(baseUrl, token, "/api/v1/devices/current")
+            .put(json.encodeToString(registration).toRequestBody(jsonType))
+            .build()
+        executeJson(request, "Device registration failed")
+    }
+
+    suspend fun getProgress(
+        baseUrl: String,
+        token: String,
+        bookId: String,
+        deviceId: String,
+    ): ProgressResponse = withContext(Dispatchers.IO) {
+        val url = normalizeServerBaseUrl(baseUrl).toHttpUrl().newBuilder()
+            .addPathSegments("api/v1/books")
+            .addPathSegment(bookId)
+            .addPathSegment("progress")
+            .addQueryParameter("deviceId", deviceId)
+            .build()
+        val request = Request.Builder().url(url).header("Authorization", "Bearer $token").get().build()
+        executeJson(request, "Get progress failed")
+    }
+
+    suspend fun putProgress(
+        baseUrl: String,
+        token: String,
+        bookId: String,
+        progress: ProgressPutRequest,
+    ): ProgressResponse = withContext(Dispatchers.IO) {
+        val url = normalizeServerBaseUrl(baseUrl).toHttpUrl().newBuilder()
+            .addPathSegments("api/v1/books")
+            .addPathSegment(bookId)
+            .addPathSegment("progress")
+            .build()
+        val request = Request.Builder().url(url).header("Authorization", "Bearer $token")
+            .put(json.encodeToString(progress).toRequestBody(jsonType)).build()
+        executeJson(request, "Put progress failed")
+    }
+
+    private inline fun <reified T> executeJson(request: Request, failure: String): T =
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw ApiException(response.code, body.ifBlank { failure })
+            json.decodeFromString(body)
+        }
 
     private fun authorizedBuilder(baseUrl: String, token: String, path: String): Request.Builder =
         Request.Builder()

@@ -1,0 +1,84 @@
+package com.amwangfan.omnireader.data
+
+interface ReadingSyncGateway {
+    suspend fun register(identity: DeviceRegistrationRequest)
+    suspend fun get(bookId: String, deviceId: String): ProgressResponse
+    suspend fun put(bookId: String, request: ProgressPutRequest): ProgressResponse
+}
+
+class OmniReadingSyncGateway(
+    private val api: OmniApi,
+    private val baseUrl: String,
+    private val token: String,
+) : ReadingSyncGateway {
+    override suspend fun register(identity: DeviceRegistrationRequest) { api.registerDevice(baseUrl, token, identity) }
+    override suspend fun get(bookId: String, deviceId: String) = api.getProgress(baseUrl, token, bookId, deviceId)
+    override suspend fun put(bookId: String, request: ProgressPutRequest) = api.putProgress(baseUrl, token, bookId, request)
+}
+
+data class ResumeProgress(
+    val locator: ReadingLocator,
+    val sourceDeviceName: String? = null,
+    val revisionMismatch: Boolean = false,
+)
+
+class ReadingSyncCoordinator(
+    private val gateway: ReadingSyncGateway,
+    private val store: ReadingStateStore,
+    private val identity: DeviceRegistrationRequest,
+) {
+    suspend fun syncBook(bookId: String): ProgressResponse {
+        gateway.register(identity)
+        val local = store.get(bookId, identity.id)
+        if (local?.dirty == true) {
+            val uploaded = gateway.put(
+                bookId,
+                ProgressPutRequest(
+                    deviceId = identity.id,
+                    locator = local.locator,
+                    percentage = local.locator.bookProgress,
+                    clientUpdatedAt = null,
+                    dailyReadSeconds = local.dailyReadSeconds,
+                ),
+            )
+            val accepted = uploaded.deviceProgress?.updatedAt ?: uploaded.globalProgress
+                ?.takeIf { it.deviceId == identity.id }?.updatedAt
+            store.markCleanIfUnchanged(bookId, identity.id, local.generation, accepted)
+        }
+        return gateway.get(bookId, identity.id)
+    }
+
+    suspend fun syncAllDirty() {
+        gateway.register(identity)
+        var firstFailure: Throwable? = null
+        store.dirtyRecords().filter { it.second == identity.id }.forEach { (bookId, _, _) ->
+            runCatching { syncBook(bookId) }.onFailure { if (firstFailure == null) firstFailure = it }
+        }
+        firstFailure?.let { throw it }
+    }
+
+    suspend fun resumeFor(bookId: String): ResumeProgress? {
+        val before = store.get(bookId, identity.id)
+        val response = runCatching {
+            if (before?.dirty == true) syncBook(bookId) else {
+                gateway.register(identity)
+                gateway.get(bookId, identity.id)
+            }
+        }.getOrNull() ?: return before?.let { ResumeProgress(it.locator) }
+        val current = store.get(bookId, identity.id)
+        if (current != null && (current.dirty || current.generation != before?.generation)) {
+            return ResumeProgress(current.locator)
+        }
+        return response.bestResume(current?.locator ?: before?.locator)
+    }
+
+    private fun ProgressResponse.bestResume(local: ReadingLocator?): ResumeProgress? {
+        val best = globalProgress ?: deviceProgress
+        if (best != null) return ResumeProgress(
+            locator = best.locator,
+            sourceDeviceName = best.deviceName.takeIf { best.deviceId != identity.id && it.isNotBlank() },
+            revisionMismatch = best.revisionMismatch,
+        )
+        return local?.let { ResumeProgress(it) }
+    }
+}

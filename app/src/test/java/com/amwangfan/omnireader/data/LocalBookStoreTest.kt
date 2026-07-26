@@ -62,6 +62,63 @@ class LocalBookStoreTest {
     }
 
     @Test
+    fun update_validatesNewEpubBeforeSwitchingManagedFile() = runTest {
+        val original = store.download(remoteBook("revision-1"), StorageDestination.Internal) { output ->
+            output.write("old epub".toByteArray())
+            8
+        }
+        val updatedBytes = fixtureEpubBytes("Updated Book")
+
+        val updated = store.update(remoteBook("revision-2"), EpubParser()) { output ->
+            output.write(updatedBytes)
+            updatedBytes.size.toLong()
+        }
+
+        assertEquals("revision-2", updated.contentRevision)
+        assertEquals("Updated Book", EpubParser().parse(store.materialize(updated)).title)
+        assertFalse(files.contents.containsKey(original.fileName))
+        assertEquals(listOf(updated), store.loadBooks())
+    }
+
+    @Test
+    fun update_parseFailureKeepsOldManagedFileAndIndex() = runTest {
+        val original = store.download(remoteBook("revision-1"), StorageDestination.Internal) { output ->
+            output.write("old epub".toByteArray())
+            8
+        }
+
+        val failure = runCatching {
+            store.update(remoteBook("revision-2"), EpubParser()) { output ->
+                output.write("not an epub".toByteArray())
+                11
+            }
+        }.exceptionOrNull()
+
+        assertNotNull(failure)
+        assertEquals(listOf(original), store.loadBooks())
+        assertEquals("old epub", files.contents.getValue(original.fileName).decodeToString())
+        assertEquals(1, files.discardCount)
+    }
+
+    @Test
+    fun update_documentBookStagesReplacementInOriginalTree() = runTest {
+        val tree = StorageDestination.Tree("content://library")
+        store.download(remoteBook("revision-1"), tree) { output ->
+            output.write("old epub".toByteArray())
+            8
+        }
+        val updatedBytes = fixtureEpubBytes("Updated Book")
+
+        val updated = store.update(remoteBook("revision-2"), EpubParser()) { output ->
+            output.write(updatedBytes)
+            updatedBytes.size.toLong()
+        }
+
+        assertEquals(tree, files.createdDestinations.last())
+        assertEquals("content://library", updated.storageTreeUri)
+    }
+
+    @Test
     fun duplicateImport_discardsSecondCopyAndKeepsOneRecord() = runTest {
         val epub = fixtureEpubBytes()
 
@@ -87,6 +144,31 @@ class LocalBookStoreTest {
         assertEquals(BookSyncState.PENDING_UPLOAD, first.syncState)
         assertEquals(1, store.loadBooks().size)
         assertEquals(1, files.discardCount)
+    }
+
+    @Test
+    fun documentImport_remembersTreeForFutureRevisionUpdates() = runTest {
+        val local = store.importBook(
+            source = ByteArrayInputStream(fixtureEpubBytes()),
+            sourceName = "sample.epub",
+            destination = StorageDestination.Tree("content://library"),
+            autoUpload = false,
+            parser = EpubParser(),
+        )
+
+        assertEquals("content://library", local.storageTreeUri)
+    }
+
+    @Test
+    fun treeUriFromDocumentUri_derivesTypicalSafTreeWithoutDocumentPath() {
+        assertEquals(
+            "content://com.android.externalstorage.documents/tree/primary%3ABooks",
+            treeUriFromDocumentUri(
+                "content://com.android.externalstorage.documents/tree/primary%3ABooks/document/primary%3ABooks%2Fbook.epub",
+            ),
+        )
+        assertEquals(null, treeUriFromDocumentUri("content://provider/document/book"))
+        assertEquals(null, treeUriFromDocumentUri("https://provider/tree/root/document/book"))
     }
 
     @Test
@@ -122,7 +204,7 @@ class LocalBookStoreTest {
         assertTrue(store.loadBooks().isEmpty())
     }
 
-    private fun remoteBook() = BookDto(
+    private fun remoteBook(contentRevision: String = "") = BookDto(
         id = "remote-1",
         title = "Remote Book",
         author = "Remote Author",
@@ -131,9 +213,10 @@ class LocalBookStoreTest {
         checksum = "remote-sum",
         createdAt = "now",
         updatedAt = "now",
+        contentRevision = contentRevision,
     )
 
-    private fun fixtureEpubBytes(): ByteArray {
+    private fun fixtureEpubBytes(title: String = "Fixture Book"): ByteArray {
         val output = ByteArrayOutputStream()
         ZipOutputStream(output).use { zip ->
             zip.putText(
@@ -142,7 +225,7 @@ class LocalBookStoreTest {
             )
             zip.putText(
                 "OPS/content.opf",
-                """<package xmlns="http://www.idpf.org/2007/opf"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Fixture Book</dc:title><dc:creator>Fixture Author</dc:creator></metadata><manifest><item id="c1" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>""",
+                """<package xmlns="http://www.idpf.org/2007/opf"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>$title</dc:title><dc:creator>Fixture Author</dc:creator></metadata><manifest><item id="c1" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>""",
             )
             zip.putText(
                 "OPS/chapter.xhtml",
@@ -163,10 +246,12 @@ private class FakeManagedBookFiles(
     private val tempDir: File,
 ) : ManagedBookFiles {
     val contents = mutableMapOf<String, ByteArray>()
+    val createdDestinations = mutableListOf<StorageDestination>()
     var discardCount = 0
     var nextDeleteResult = ManagedDeleteResult.DELETED
 
     override fun create(destination: StorageDestination, displayName: String): ManagedOutput {
+        createdDestinations += destination
         val fileName = "${contents.size}-${displayName}"
         val output = object : ByteArrayOutputStream() {
             override fun close() {
@@ -176,8 +261,8 @@ private class FakeManagedBookFiles(
         }
         return ManagedOutput(
             fileName = fileName,
-            storageKind = StorageKind.INTERNAL,
-            documentUri = null,
+            storageKind = if (destination is StorageDestination.Tree) StorageKind.DOCUMENT_URI else StorageKind.INTERNAL,
+            documentUri = (destination as? StorageDestination.Tree)?.let { "${it.uri}/$fileName" },
             outputStream = output,
             discard = {
                 discardCount += 1

@@ -53,6 +53,7 @@ fun OmniReaderApp(viewModel: AppViewModel = viewModel()) {
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingDownload by remember { mutableStateOf<BookDto?>(null) }
+    var pendingUpdate by remember { mutableStateOf<BookDto?>(null) }
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -87,6 +88,22 @@ fun OmniReaderApp(viewModel: AppViewModel = viewModel()) {
     }
     LaunchedEffect(state.lastSyncMessage) {
         state.lastSyncMessage?.let { snackbarHostState.showSnackbar(it) }
+    }
+    val updateFolderLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        val book = pendingUpdate
+        pendingUpdate = null
+        if (uri != null && book != null) {
+            persistTreePermission(context, uri)
+            viewModel.updateBook(book, uri.toString())
+        }
+    }
+    LaunchedEffect(state.readerNotice) {
+        state.readerNotice?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.consumeReaderNotice()
+        }
     }
 
     Scaffold(
@@ -176,6 +193,11 @@ fun OmniReaderApp(viewModel: AppViewModel = viewModel()) {
                     onSettings = viewModel::showSettings,
                     onSync = viewModel::sync,
                     onRead = viewModel::openBook,
+                    onUpdate = { book -> viewModel.updateBook(book) },
+                    onChooseUpdateFolder = { book ->
+                        pendingUpdate = book
+                        updateFolderLauncher.launch(null)
+                    },
                     onDownloadDefault = viewModel::download,
                     onChooseFolder = { book ->
                         pendingDownload = book
@@ -200,6 +222,10 @@ fun OmniReaderApp(viewModel: AppViewModel = viewModel()) {
                     padding = screenPadding,
                     onPrevious = viewModel::previousChapter,
                     onNext = viewModel::nextChapter,
+                    onCheckpoint = viewModel::checkpointReading,
+                    onVisiblePosition = viewModel::updateVisibleReadingPosition,
+                    onActiveChanged = viewModel::readerActive,
+                    onDisposed = viewModel::clearReaderAfterDispose,
                 )
             }
         }

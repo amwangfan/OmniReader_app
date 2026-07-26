@@ -1,6 +1,7 @@
 package com.amwangfan.omnireader.data
 
 import android.content.Context
+import java.util.UUID
 
 class AppPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("omnireader", Context.MODE_PRIVATE)
@@ -49,11 +50,29 @@ class AppPreferences(context: Context) {
             .apply()
     }
 
+    fun getOrCreateDeviceId(uuidFactory: () -> String = { UUID.randomUUID().toString() }): String =
+        getOrCreateStableId(
+            read = { prefs.getString(KEY_DEVICE_ID, "").orEmpty() },
+            write = { prefs.edit().putString(KEY_DEVICE_ID, it).commit() },
+            generate = uuidFactory,
+        )
+
     private companion object {
         const val KEY_SERVER_URL = "server_url"
         const val KEY_ACCESS_TOKEN = "access_token"
         const val KEY_REFRESH_TOKEN = "refresh_token"
         const val KEY_DEFAULT_DOWNLOAD_TREE_URI = "default_download_tree_uri"
         const val KEY_AUTO_UPLOAD_IMPORTS = "auto_upload_imports"
+        const val KEY_DEVICE_ID = "device_id"
     }
+}
+
+internal fun getOrCreateStableId(
+    read: () -> String,
+    write: (String) -> Unit,
+    generate: () -> String,
+): String {
+    val existing = read().trim()
+    if (existing.isNotEmpty()) return existing
+    return generate().also(write)
 }
